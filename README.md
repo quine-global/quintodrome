@@ -6,7 +6,8 @@ A [Tauri](https://tauri.app) desktop app that wraps
 [Navidrome](https://www.navidrome.org) — your self-hosted music server — into a
 native macOS/Windows application.
 
-<img width="1179" height="904" alt="Screenshot 2026-09-23 at 1 13 43 AM" src="https://github.com/user-attachments/assets/228be4d4-7ef8-45eb-8b41-7cbde60dd484" />
+<img width="1179" height="904" alt="Screenshot of Quintodrome music player" src="./screenshot.png" />
+
 
 The server is bundled as a sidecar binary and managed automatically, so there's
 nothing to install, configure, or keep running: launch the app and it starts
