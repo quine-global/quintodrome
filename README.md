@@ -19,18 +19,6 @@ nothing to install, configure, or keep running: launch the app and it starts
 
 ## What it does
 
-On launch the app:
-
-1. Checks whether a Navidrome server is already listening on `127.0.0.1:4533`
-   (via its `/ping` health endpoint). If so, it reuses it as-is.
-2. Otherwise it spawns the bundled `navidrome` binary as a **separate sidecar
-   process**, pointed at the OS app-data/music directories, and waits for it to
-   become ready.
-3. Loads the Navidrome UI in the content webview, below a thin toolbar with
-   back/forward/reload buttons and an address bar.
-4. On exit, sends `SIGTERM` to the spawned server so it shuts down gracefully
-   (falls back to a hard kill after 3s).
-
 Batteries included:
 
 - **Auto-provisioning** — on a fresh install the app creates the initial admin
