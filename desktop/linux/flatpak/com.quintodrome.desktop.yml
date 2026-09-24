@@ -1,0 +1,37 @@
+# Repackages the Tauri-built .deb (staged as ../quintodrome.deb by the CI
+# build) into a Flatpak. The GNOME runtime provides webkit2gtk-4.1.
+app-id: com.quintodrome.desktop
+runtime: org.gnome.Platform
+runtime-version: '49'
+sdk: org.gnome.Sdk
+command: quintodrome
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  - --filesystem=xdg-music
+modules:
+  - name: quintodrome
+    buildsystem: simple
+    sources:
+      - type: file
+        path: ../quintodrome.deb
+    build-commands:
+      - ar -x quintodrome.deb
+      - tar -xf data.tar.*
+      # Tauri resolves the navidrome sidecar next to its own executable.
+      - install -Dm755 usr/bin/quintodrome /app/bin/quintodrome
+      - install -Dm755 usr/bin/navidrome /app/bin/navidrome
+      - install -Dm644 usr/share/applications/Quintodrome.desktop
+        /app/share/applications/com.quintodrome.desktop.desktop
+      - desktop-file-edit --set-icon=com.quintodrome.desktop
+        /app/share/applications/com.quintodrome.desktop.desktop
+      - |
+        for icon in usr/share/icons/hicolor/*x*/apps/quintodrome.png; do
+          size=$(basename "$(dirname "$(dirname "$icon")")")
+          case "$size" in *@*) continue ;; esac
+          install -Dm644 "$icon" "/app/share/icons/hicolor/$size/apps/com.quintodrome.desktop.png"
+        done

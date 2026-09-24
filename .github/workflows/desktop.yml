@@ -1,8 +1,9 @@
 name: Desktop Release
 
-# Builds the Quintodrome desktop app (Tauri) for macOS (.app/.dmg) and
-# Windows (.exe/.msi), bundling the Navidrome server as a sidecar, and
-# attaches the artifacts to the GitHub release on `v*` tags.
+# Builds the Quintodrome desktop app (Tauri) for macOS (.app/.dmg),
+# Windows (.exe/.msi) and Linux (.flatpak/.snap, x86_64 + aarch64), bundling
+# the Navidrome server as a sidecar, and attaches the artifacts to the GitHub
+# release on `v*` tags.
 #
 # Note: artifacts are unsigned (no Apple/Windows code-signing certs), so users
 # will hit Gatekeeper/SmartScreen prompts.
@@ -141,9 +142,31 @@ jobs:
           path: dist/*
           retention-days: 7
 
+  build-linux:
+    name: Build Linux (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build
+        uses: ./.github/actions/build-linux
+        with:
+          arch: ${{ matrix.arch }}
+          upload-artifact: true
+
   release:
     name: Publish GitHub release
-    needs: build-desktop
+    needs:
+      - build-desktop
+      - build-linux
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:

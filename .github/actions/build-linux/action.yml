@@ -1,0 +1,126 @@
+name: 'Build Linux'
+description: 'Builds the Quintodrome desktop app and packages it as a Flatpak and a Snap'
+inputs:
+  arch:
+    description: 'Architecture name used in artifact names (x86_64 or aarch64)'
+    required: true
+  upload-artifact:
+    description: 'Whether to upload artifacts'
+    required: false
+    default: 'true'
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node
+      uses: actions/setup-node@v6
+      with:
+        node-version: 24
+        cache: npm
+        cache-dependency-path: ui/package-lock.json
+
+    - name: Setup Go
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: go.mod
+
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Rust build
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: desktop/src-tauri
+
+    - name: Install Tauri build dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential file patchelf \
+          libwebkit2gtk-4.1-dev libssl-dev librsvg2-dev libxdo-dev
+
+    - name: Install Flatpak build tools
+      shell: bash
+      run: |
+        sudo apt-get install -y flatpak flatpak-builder
+        flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+
+    - name: Cache Flatpak runtimes
+      uses: actions/cache@v5
+      with:
+        path: ~/.local/share/flatpak
+        key: flatpak-runtimes-${{ runner.os }}-${{ inputs.arch }}-gnome-49
+
+    - name: Install Snapcraft
+      shell: bash
+      run: sudo snap install snapcraft --classic
+
+    - name: Build Navidrome web UI
+      shell: bash
+      run: |
+        cd ui
+        npm ci --ignore-scripts
+        npm run build
+
+    - name: Build Navidrome server binary
+      shell: bash
+      run: |
+        GIT_SHA=$(git rev-parse --short HEAD)
+        if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+          GIT_TAG="${GITHUB_REF_NAME#v}"
+        else
+          GIT_TAG="dev"
+        fi
+
+        go build \
+          -ldflags="-X github.com/navidrome/navidrome/consts.gitSha=$GIT_SHA -X github.com/navidrome/navidrome/consts.gitTag=$GIT_TAG" \
+          -tags=netgo,sqlite_fts5 \
+          -o navidrome
+
+        # Stage the sidecar under the target-triple name tauri expects.
+        TRIPLE="$(cd desktop && rustc -vV | sed -n 's/^host: //p')"
+        mkdir -p desktop/src-tauri/binaries
+        install -m755 navidrome "desktop/src-tauri/binaries/navidrome-$TRIPLE"
+
+    - name: Build Tauri app (.deb)
+      # The .deb is only an intermediate: both the Flatpak and Snap repackage it.
+      shell: bash
+      run: |
+        cd desktop
+        npx --yes @tauri-apps/cli@2 build --bundles deb
+        cp src-tauri/target/release/bundle/deb/*.deb linux/quintodrome.deb
+        cp linux/quintodrome.deb linux/snapcraft/quintodrome.deb
+
+    - name: Build Flatpak
+      shell: bash
+      run: |
+        mkdir -p dist
+        cd desktop/linux
+        flatpak-builder --user --force-clean --install-deps-from=flathub \
+          --repo=flatpak-repo flatpak-build flatpak/com.quintodrome.desktop.yml
+        flatpak build-bundle \
+          --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
+          flatpak-repo "../../dist/Quintodrome-linux-${{ inputs.arch }}.flatpak" com.quintodrome.desktop
+
+    - name: Build Snap
+      # The runner is Ubuntu 24.04, matching the snap's core24 base, so build
+      # directly on the host instead of spinning up an LXD container.
+      shell: bash
+      run: |
+        cd desktop/linux/snapcraft
+        sudo snapcraft pack --destructive-mode \
+          --output "../../../dist/Quintodrome-linux-${{ inputs.arch }}.snap"
+
+    - name: List artifacts
+      shell: bash
+      run: ls -la dist
+
+    - name: Archive Build Artifacts
+      if: ${{ inputs.upload-artifact == 'true' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: desktop-linux-${{ inputs.arch }}
+        path: |
+          dist/*.flatpak
+          dist/*.snap
+        retention-days: 7

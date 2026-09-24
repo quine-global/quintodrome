@@ -42,3 +42,11 @@ go.work*
 .worktrees/
 .dagger/internal/
 .dagger/querybuilder/
+desktop/linux/quintodrome.deb
+desktop/linux/snapcraft/quintodrome.deb
+desktop/linux/snapcraft/parts/
+desktop/linux/snapcraft/stage/
+desktop/linux/snapcraft/prime/
+desktop/linux/flatpak-build/
+desktop/linux/flatpak-repo/
+desktop/linux/.flatpak-builder/

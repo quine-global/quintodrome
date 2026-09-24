@@ -1,0 +1,44 @@
+# Repackages the Tauri-built .deb (staged as ./quintodrome.deb by the CI
+# build) into a Snap. Built with `snapcraft pack --destructive-mode` on an
+# Ubuntu 24.04 host, so the binaries match the core24 base's glibc.
+name: quintodrome
+base: core24
+adopt-info: quintodrome
+summary: Desktop app that hosts the Navidrome music server
+description: |
+  Quintodrome wraps Navidrome in a desktop app: it starts a bundled Navidrome
+  server and shows its web UI in a native window.
+grade: stable
+confinement: strict
+
+# WebKit looks for its helper processes at a compiled-in path.
+layout:
+  /usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.1:
+    bind: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.1
+
+apps:
+  quintodrome:
+    command: usr/bin/quintodrome
+    desktop: usr/share/applications/Quintodrome.desktop
+    extensions: [gnome]
+    environment:
+      # The snap's $HOME is remapped, so point Navidrome at the real music dir.
+      QUINTODROME_MUSIC_FOLDER: $SNAP_REAL_HOME/Music
+    plugs:
+      - home
+      - network
+      - network-bind
+      - audio-playback
+      - removable-media
+
+parts:
+  quintodrome:
+    plugin: nil
+    source: .
+    stage-packages:
+      - libwebkit2gtk-4.1-0
+    override-build: |
+      dpkg -x quintodrome.deb "$CRAFT_PART_INSTALL"
+      craftctl set version="$(dpkg-deb -f quintodrome.deb Version)"
+      sed -i -e 's|^Icon=.*|Icon=${SNAP}/usr/share/icons/hicolor/128x128/apps/quintodrome.png|' \
+        "$CRAFT_PART_INSTALL/usr/share/applications/Quintodrome.desktop"
