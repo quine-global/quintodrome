@@ -102,7 +102,7 @@ release:
   draft: true
   mode: append
   footer: |
-    **Full Changelog**: https://github.com/navidrome/navidrome/compare/{{ .PreviousTag }}...{{ .Tag }}
+    {{ if .PreviousTag }}**Full Changelog**: https://github.com/{{ .Env.GITHUB_REPOSITORY }}/compare/{{ .PreviousTag }}...{{ .Tag }}{{ end }}
 
     ## Helping out
 
@@ -125,6 +125,11 @@ release:
       name_template: navidrome_{{.Version}}_windows_amd64_installer.msi
 
 changelog:
+  # This is the first tag in the repo, and it was created on top of an
+  # imported upstream history (~4800 commits), so a full changelog would
+  # blow past GitHub's 125000-character release body limit. Disable it for
+  # now; re-enable once there's a previous tag to diff against.
+  disable: true
   sort: asc
   use: github
   filters:
