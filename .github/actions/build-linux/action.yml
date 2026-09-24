@@ -105,11 +105,14 @@ runs:
     - name: Build Snap
       # The runner is Ubuntu 24.04, matching the snap's core24 base, so build
       # directly on the host instead of spinning up an LXD container.
+      # snapcraft refuses an --output path that escapes the project dir (e.g.
+      # via ../..), so pack in place and move the result into dist/ ourselves.
       shell: bash
       run: |
         cd desktop/linux/snapcraft
-        sudo snapcraft pack --destructive-mode \
-          --output "../../../dist/Quintodrome-linux-${{ inputs.arch }}.snap"
+        sudo snapcraft pack --destructive-mode
+        mkdir -p ../../../dist
+        mv ./*.snap "../../../dist/Quintodrome-linux-${{ inputs.arch }}.snap"
 
     - name: List artifacts
       shell: bash
