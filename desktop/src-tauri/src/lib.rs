@@ -8,6 +8,12 @@ use tauri::{
 use tauri_plugin_opener::OpenerExt;
 
 const TOOLBAR_HEIGHT: f64 = 60.0;
+/// Fallback logical window size, matching `tauri.conf.json`'s configured
+/// window dimensions. Used when the window's real geometry isn't known yet
+/// (e.g. on Linux/Wayland, where `inner_size()` can report 0x0 before the
+/// window has been realized by the compositor).
+const DEFAULT_WIDTH: f64 = 1280.0;
+const DEFAULT_HEIGHT: f64 = 800.0;
 const DEFAULT_PUBLIC_URL: &str = "http://quintodrome";
 
 /// Maps the internal Navidrome origin (e.g. `http://127.0.0.1:4533`) to a
@@ -112,14 +118,30 @@ fn start_url_poller(app: &tauri::AppHandle, mask: UrlMask) {
 /// Positions the toolbar strip at the top and the content webview below it.
 fn layout(app: &tauri::AppHandle) {
     let Some(window) = app.get_window("main") else {
+        eprintln!("quintodrome: layout: no \"main\" window");
         return;
     };
-    let Ok(size) = window.inner_size() else {
-        return;
+    let size = match window.inner_size() {
+        Ok(size) => size,
+        Err(err) => {
+            eprintln!("quintodrome: layout: inner_size() failed: {err}");
+            return;
+        }
     };
-    let Ok(scale) = window.scale_factor() else {
-        return;
+    let scale = match window.scale_factor() {
+        Ok(scale) => scale,
+        Err(err) => {
+            eprintln!("quintodrome: layout: scale_factor() failed: {err}");
+            return;
+        }
     };
+    if size.width == 0 || size.height == 0 {
+        eprintln!(
+            "quintodrome: layout: window not realized yet ({}x{} physical), skipping",
+            size.width, size.height
+        );
+        return;
+    }
     let width = size.width as f64 / scale;
     let height = size.height as f64 / scale;
 
@@ -267,11 +289,33 @@ pub fn run() {
                 });
 
             if let Some(window) = app.get_window("main") {
+                // Best-effort initial sizing: the window's real geometry isn't
+                // always known yet at this point (notably on Linux/Wayland),
+                // so fall back to the configured window size rather than an
+                // arbitrary guess. `layout()` below corrects this once the
+                // window is realized.
+                let (init_width, init_height) = window
+                    .inner_size()
+                    .ok()
+                    .zip(window.scale_factor().ok())
+                    .filter(|(size, _)| size.width > 0 && size.height > 0)
+                    .map(|(size, scale)| (size.width as f64 / scale, size.height as f64 / scale))
+                    .unwrap_or((DEFAULT_WIDTH, DEFAULT_HEIGHT));
+
                 let _ = window.add_child(
                     content,
                     LogicalPosition::new(0.0, TOOLBAR_HEIGHT),
-                    LogicalSize::new(800.0, 600.0),
+                    LogicalSize::new(init_width, (init_height - TOOLBAR_HEIGHT).max(0.0)),
                 );
+
+                // Never leave the toolbar in its default auto-resize state,
+                // which fills the entire window - even if `layout()` below
+                // can't yet compute a corrected size.
+                if let Some(toolbar) = app.get_webview("main") {
+                    let _ = toolbar.set_auto_resize(false);
+                    let _ = toolbar.set_size(LogicalSize::new(init_width, TOOLBAR_HEIGHT));
+                }
+
                 let handle = handle.clone();
                 window.on_window_event(move |event| {
                     if let WindowEvent::Resized(_) = event {
@@ -281,6 +325,18 @@ pub fn run() {
             }
 
             layout(app.handle());
+
+            // On Linux/Wayland the window's true geometry sometimes isn't
+            // available yet during setup(), and no further Resized event
+            // follows once it settles, so re-assert the layout shortly after
+            // startup as a safety net.
+            {
+                let handle = handle.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    let _ = handle.run_on_main_thread(move || layout(&handle));
+                });
+            }
 
             #[cfg(target_os = "macos")]
             enable_swipe_navigation(app.handle());
