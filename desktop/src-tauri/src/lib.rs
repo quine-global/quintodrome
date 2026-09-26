@@ -334,7 +334,8 @@ pub fn run() {
                 let handle = handle.clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(250));
-                    let _ = handle.run_on_main_thread(move || layout(&handle));
+                    let inner_handle = handle.clone();
+                    let _ = handle.run_on_main_thread(move || layout(&inner_handle));
                 });
             }
 
