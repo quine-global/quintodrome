@@ -64,6 +64,18 @@ macOS). Cross-platform binaries are built in CI — see
 > Artifacts are unsigned (no Apple/Windows code-signing certs), so users will
 > see Gatekeeper/SmartScreen prompts.
 
+### macOS: "Quintodrome is damaged and can't be opened"
+
+Because the app isn't signed with an Apple Developer ID, macOS blocks
+downloaded copies. After moving the app to `/Applications`, run:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Quintodrome.app
+codesign --force --deep -s - /Applications/Quintodrome.app
+```
+
+The Homebrew cask strips the quarantine flag automatically on install.
+
 ## Configuration
 
 Environment variables override the defaults:
@@ -77,7 +89,7 @@ Environment variables override the defaults:
 | `QUINTODROME_PUBLIC_URL`    | `http://quintodrome`           | Friendly origin shown in the address bar |
 
 The data folder (database, cache) is always the OS app-data directory
-(e.g. `~/Library/Application Support/com.quintodrome.desktop` on macOS).
+(e.g. `~/Library/Application Support/com.quineglobal.drome` on macOS).
 
 ## Repository layout
 

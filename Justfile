@@ -20,9 +20,9 @@ clean-state:
     #!/usr/bin/env bash
     set -euo pipefail
     case "$(uname -s)" in
-      Darwin) dir="$HOME/Library/Application Support/com.quintodrome.desktop" ;;
-      Linux)  dir="${XDG_DATA_HOME:-$HOME/.local/share}/com.quintodrome.desktop" ;;
-      MINGW*|MSYS*|CYGWIN*) dir="${APPDATA:-$HOME/AppData/Roaming}/com.quintodrome.desktop" ;;
+      Darwin) dir="$HOME/Library/Application Support/com.quineglobal.drome" ;;
+      Linux)  dir="${XDG_DATA_HOME:-$HOME/.local/share}/com.quineglobal.drome" ;;
+      MINGW*|MSYS*|CYGWIN*) dir="${APPDATA:-$HOME/AppData/Roaming}/com.quineglobal.drome" ;;
       *) echo "unsupported OS" >&2; exit 1 ;;
     esac
     echo "Removing: $dir"

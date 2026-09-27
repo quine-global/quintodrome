@@ -5,8 +5,8 @@ name: Desktop Release
 # the Navidrome server as a sidecar, and attaches the artifacts to the GitHub
 # release on `v*` tags.
 #
-# Note: artifacts are unsigned (no Apple/Windows code-signing certs), so users
-# will hit Gatekeeper/SmartScreen prompts.
+# Note: artifacts are not signed with Apple/Windows certs (macOS builds are only
+# ad-hoc signed), so users will hit Gatekeeper/SmartScreen prompts.
 
 on:
   push:
@@ -185,3 +185,12 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+          body: |
+            ### macOS: "Quintodrome is damaged and can't be opened"
+
+            The app isn't signed with an Apple Developer ID, so macOS blocks downloaded copies. After moving it to `/Applications`, run:
+
+            ```sh
+            xattr -dr com.apple.quarantine /Applications/Quintodrome.app
+            codesign --force --deep -s - /Applications/Quintodrome.app
+            ```

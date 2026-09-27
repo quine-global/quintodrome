@@ -115,7 +115,7 @@ Environment variables override the defaults:
 | `QUINTODROME_PUBLIC_URL`    | `http://quintodrome`     | Friendly origin shown in the address bar |
 
 The data folder (DB, cache) is always the OS app-data directory
-(e.g. `~/Library/Application Support/com.quintodrome.desktop` on macOS).
+(e.g. `~/Library/Application Support/com.quineglobal.drome` on macOS).
 
 > Note: if a Navidrome server is already running on the configured host/port,
 > the app simply loads it and does **not** start a second instance.

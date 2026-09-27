@@ -72,11 +72,39 @@ pub fn ensure_running(handle: &AppHandle, navidrome: &Navidrome) -> Result<(), S
     Ok(())
 }
 
+/// Bundle identifier used before the rename to com.quineglobal.drome. The app
+/// data folder is named after the identifier, so it moved with the rename.
+const LEGACY_IDENTIFIER: &str = "com.quintodrome.desktop";
+
+/// Moves Navidrome's data (database, cache, backups) from the pre-rename data
+/// folder to `data_folder`, once, so existing users keep their library. Does
+/// nothing if the new folder already exists or there is no old folder.
+fn migrate_legacy_data_folder(data_folder: &std::path::Path) {
+    let Some(legacy) = data_folder.parent().map(|p| p.join(LEGACY_IDENTIFIER)) else {
+        return;
+    };
+    if data_folder.exists() || !legacy.is_dir() {
+        return;
+    }
+    match std::fs::rename(&legacy, data_folder) {
+        Ok(()) => eprintln!(
+            "quintodrome: moved data folder {} -> {}",
+            legacy.display(),
+            data_folder.display()
+        ),
+        Err(err) => eprintln!(
+            "quintodrome: could not move data folder {}: {err}",
+            legacy.display()
+        ),
+    }
+}
+
 fn spawn(handle: &AppHandle, navidrome: &Navidrome) -> Result<(), ServerError> {
     let data_folder = handle
         .path()
         .app_data_dir()
         .map_err(|_| ServerError::DataFolder)?;
+    migrate_legacy_data_folder(&data_folder);
     std::fs::create_dir_all(&data_folder).ok();
 
     let music_folder = match std::env::var_os("QUINTODROME_MUSIC_FOLDER") {

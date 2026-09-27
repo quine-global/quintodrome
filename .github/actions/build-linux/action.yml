@@ -97,10 +97,10 @@ runs:
         mkdir -p dist
         cd desktop/linux
         flatpak-builder --user --force-clean --install-deps-from=flathub \
-          --repo=flatpak-repo flatpak-build flatpak/com.quintodrome.desktop.yml
+          --repo=flatpak-repo flatpak-build flatpak/com.quineglobal.drome.yml
         flatpak build-bundle \
           --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
-          flatpak-repo "../../dist/Quintodrome-linux-${{ inputs.arch }}.flatpak" com.quintodrome.desktop
+          flatpak-repo "../../dist/Quintodrome-linux-${{ inputs.arch }}.flatpak" com.quineglobal.drome
 
     - name: Build Snap
       # The runner is Ubuntu 24.04, matching the snap's core24 base, so build

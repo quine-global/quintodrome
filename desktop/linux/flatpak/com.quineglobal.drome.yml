@@ -1,6 +1,6 @@
 # Repackages the Tauri-built .deb (staged as ../quintodrome.deb by the CI
 # build) into a Flatpak. The GNOME runtime provides webkit2gtk-4.1.
-app-id: com.quintodrome.desktop
+app-id: com.quineglobal.drome
 runtime: org.gnome.Platform
 runtime-version: '49'
 sdk: org.gnome.Sdk
@@ -19,6 +19,12 @@ modules:
     sources:
       - type: file
         path: ../quintodrome.deb
+      - type: file
+        path: com.quineglobal.drome.metainfo.xml
+      # The .deb only carries 32px/128px icons; ship the 512px one too so
+      # software centers get a sharp icon.
+      - type: file
+        path: ../../src-tauri/icons/icon.png
     build-commands:
       - ar -x quintodrome.deb
       - tar -xf data.tar.*
@@ -26,12 +32,18 @@ modules:
       - install -Dm755 usr/bin/quintodrome /app/bin/quintodrome
       - install -Dm755 usr/bin/navidrome /app/bin/navidrome
       - install -Dm644 usr/share/applications/Quintodrome.desktop
-        /app/share/applications/com.quintodrome.desktop.desktop
-      - desktop-file-edit --set-icon=com.quintodrome.desktop
-        /app/share/applications/com.quintodrome.desktop.desktop
+        /app/share/applications/com.quineglobal.drome.desktop
+      - desktop-file-edit --set-icon=com.quineglobal.drome
+        /app/share/applications/com.quineglobal.drome.desktop
       - |
         for icon in usr/share/icons/hicolor/*x*/apps/quintodrome.png; do
           size=$(basename "$(dirname "$(dirname "$icon")")")
           case "$size" in *@*) continue ;; esac
-          install -Dm644 "$icon" "/app/share/icons/hicolor/$size/apps/com.quintodrome.desktop.png"
+          install -Dm644 "$icon" "/app/share/icons/hicolor/$size/apps/com.quineglobal.drome.png"
         done
+      - install -Dm644 icon.png
+        /app/share/icons/hicolor/512x512/apps/com.quineglobal.drome.png
+      # flatpak-builder composes AppStream data (name, summary, icon) from
+      # this; without it installers show only the bare app ID.
+      - install -Dm644 com.quineglobal.drome.metainfo.xml
+        /app/share/metainfo/com.quineglobal.drome.metainfo.xml

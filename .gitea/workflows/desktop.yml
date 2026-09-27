@@ -1,11 +1,13 @@
 name: Desktop Release
 
-# Builds the Quintodrome desktop app (Tauri) for macOS (.app/.dmg) and
-# Windows (.exe/.msi), bundling the Navidrome server as a sidecar, and
-# attaches the artifacts to the Gitea release on `v*` tags.
+# Builds the Quintodrome desktop app (Tauri) for macOS (.app/.dmg), bundling
+# the Navidrome server as a sidecar, attaches the artifacts to the Forgejo
+# release on `v*` tags, and updates the Homebrew tap. Windows isn't built here
+# (no Windows runner); the Windows steps below are kept for when one exists.
 #
-# Note: artifacts are unsigned (no Apple/Windows code-signing certs), so users
-# will hit Gatekeeper/SmartScreen prompts.
+# Note: artifacts are not signed with Apple/Windows certs (macOS builds are only
+# ad-hoc signed), so users will hit Gatekeeper/SmartScreen prompts. The
+# Homebrew cask works around Gatekeeper by stripping the quarantine flag.
 
 on:
   push:
@@ -25,10 +27,9 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-          - os: macos-13 # Intel runner
+          # Cross-compiled on the same Mac runner; there is no Intel runner.
+          - os: macos-latest
             target: x86_64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -47,6 +48,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -87,6 +90,15 @@ jobs:
             GIT_TAG="dev"
           fi
 
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            # Build for the matrix target, not the runner's own arch.
+            case "${{ matrix.target }}" in
+              aarch64-*) export GOARCH=arm64 CC="clang -arch arm64" ;;
+              x86_64-*) export GOARCH=amd64 CC="clang -arch x86_64" ;;
+            esac
+            export CGO_ENABLED=1
+          fi
+
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             export CGO_ENABLED=1
             OUTPUT="navidrome.exe"
@@ -112,14 +124,14 @@ jobs:
         shell: bash
         run: |
           cd desktop
-          npx --yes @tauri-apps/cli@2 build
+          npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }}
 
       - name: Collect artifacts (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           mkdir -p dist
-          BUNDLE=desktop/src-tauri/target/release/bundle
+          BUNDLE=desktop/src-tauri/target/${{ matrix.target }}/release/bundle
           ditto -c -k --keepParent "$BUNDLE/macos/Quintodrome.app" "dist/Quintodrome-${{ matrix.target }}.app.zip"
           cp "$BUNDLE"/dmg/*.dmg dist/ 2>/dev/null || true
           ls -la dist
@@ -129,7 +141,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          BUNDLE=desktop/src-tauri/target/release/bundle
+          BUNDLE=desktop/src-tauri/target/${{ matrix.target }}/release/bundle
           cp "$BUNDLE"/nsis/*.exe dist/ 2>/dev/null || true
           cp "$BUNDLE"/msi/*.msi dist/ 2>/dev/null || true
           ls -la dist
@@ -160,15 +172,91 @@ jobs:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME#v}"
-          RELEASE_ID=$(curl -sS -X POST "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/releases" \
+          # tag_name must be the pushed tag itself (with its "v"), or Forgejo
+          # creates a second tag without it.
+          RELEASE_ID=$(curl -fsS -X POST "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/releases" \
             -H "Authorization: token $TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":false}" \
+            -d "{\"tag_name\":\"$GITHUB_REF_NAME\",\"name\":\"${GITHUB_REF_NAME#v}\",\"draft\":false}" \
             | jq -r '.id')
           for f in dist/*; do
-            curl -sS -X POST "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$(basename "$f")" \
+            curl -fsS -X POST "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$(basename "$f")" \
               -H "Authorization: token $TOKEN" \
               -H "Content-Type: application/octet-stream" \
               --data-binary @"$f"
           done
+
+  homebrew-tap:
+    name: Update Homebrew tap
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      TAP_REPO: git@forge.quinefoundation.com:Quine/homebrew-quintodrome.git
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: desktop-*-apple-darwin
+          merge-multiple: true
+
+      # The app is only ad-hoc signed, so the cask strips the quarantine flag
+      # that Homebrew adds; otherwise Gatekeeper refuses to open it.
+      - name: Write cask
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARM_SHA=$(sha256sum dist/Quintodrome-aarch64-apple-darwin.app.zip | cut -d' ' -f1)
+          INTEL_SHA=$(sha256sum dist/Quintodrome-x86_64-apple-darwin.app.zip | cut -d' ' -f1)
+          mkdir -p tap/Casks
+          cat > tap/Casks/quintodrome.rb <<CASK
+          cask "quintodrome" do
+            arch arm: "aarch64", intel: "x86_64"
+
+            version "$VERSION"
+            sha256 arm:   "$ARM_SHA",
+                   intel: "$INTEL_SHA"
+
+            url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/v#{version}/Quintodrome-#{arch}-apple-darwin.app.zip"
+            name "Quintodrome"
+            desc "Desktop app wrapping the Navidrome music server"
+            homepage "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+
+            app "Quintodrome.app"
+
+            postflight do
+              system_command "/usr/bin/xattr",
+                             args: ["-dr", "com.apple.quarantine", "#{appdir}/Quintodrome.app"]
+            end
+
+            zap trash: [
+              "~/Library/Application Support/com.quineglobal.drome",
+              "~/Library/Application Support/com.quintodrome.desktop",
+            ]
+          end
+          CASK
+          cat tap/Casks/quintodrome.rb
+
+      - name: Push to tap
+        env:
+          SSH_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SSH_KEY" ]]; then
+            echo "::error::HOMEBREW_TAP_SSH_KEY secret is not set (add it under this repo's Settings > Actions > Secrets; its public key needs write access on the tap repo)"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/tap_key
+          chmod 600 ~/.ssh/tap_key
+          echo "forge.quinefoundation.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID2WBpBywsGATL7IMkvjlYguBfeYOxPstTcsPuH0Xdp3" > ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_key -o IdentitiesOnly=yes"
+          git clone "$TAP_REPO" repo
+          mkdir -p repo/Casks
+          cp tap/Casks/quintodrome.rb repo/Casks/
+          cd repo
+          git config user.name "Quintodrome release"
+          git config user.email "noreply@forge.quinefoundation.com"
+          git add Casks/quintodrome.rb
+          git diff --cached --quiet && { echo "Cask unchanged"; exit 0; }
+          git commit -m "quintodrome ${GITHUB_REF_NAME#v}"
+          git push

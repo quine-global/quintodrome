@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata: gives software centers (GNOME Software, Discover)
+     the app's name, summary and icon when installing the Flatpak. -->
+<component type="desktop-application">
+  <id>com.quineglobal.drome</id>
+  <name>Quintodrome</name>
+  <summary>Desktop app that hosts the Navidrome music server</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <description>
+    <p>
+      Quintodrome wraps Navidrome in a desktop app: it starts a bundled
+      Navidrome server and shows its web UI in a native window.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.quineglobal.drome.desktop</launchable>
+  <url type="homepage">https://github.com/philip-peterson/quintodrome</url>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Player</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+</component>
