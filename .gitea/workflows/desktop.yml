@@ -221,6 +221,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TAP_REPO: ssh://git@forge.quinefoundation.com:2200/quine-global/homebrew-tap.git # Forgejo SSH is on 2200; 22 is the host's sshd
+      # Public address for the cask. $GITHUB_SERVER_URL is how the runner
+      # reaches Forgejo (http://localhost:3000 on mainframe), not a public URL.
+      FORGE_URL: https://forge.quinefoundation.com
     steps:
       - uses: https://code.forgejo.org/forgejo/download-artifact@v4
         with:
@@ -245,10 +248,10 @@ jobs:
             sha256 arm:   "$ARM_SHA",
                    intel: "$INTEL_SHA"
 
-            url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/v#{version}/Quintodrome-#{arch}-apple-darwin.app.zip"
+            url "$FORGE_URL/$GITHUB_REPOSITORY/releases/download/v#{version}/Quintodrome-#{arch}-apple-darwin.app.zip"
             name "Quintodrome"
             desc "Desktop app wrapping the Navidrome music server"
-            homepage "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+            homepage "$FORGE_URL/$GITHUB_REPOSITORY"
 
             app "Quintodrome.app"
 
