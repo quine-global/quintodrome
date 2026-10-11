@@ -23,6 +23,9 @@ jobs:
     name: Build desktop (${{ matrix.target }})
     strategy:
       fail-fast: false
+      # Both targets build on the one Mac, whose runners share an action
+      # cache; concurrent jobs collide on its git locks (shallow.lock).
+      max-parallel: 1
       matrix:
         include:
           - os: macos-latest
