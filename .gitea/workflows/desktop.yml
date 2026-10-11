@@ -220,7 +220,7 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     env:
-      TAP_REPO: git@forge.quinefoundation.com:quine-global/homebrew-tap.git
+      TAP_REPO: ssh://git@forge.quinefoundation.com:2200/quine-global/homebrew-tap.git # Forgejo SSH is on 2200; 22 is the host's sshd
     steps:
       - uses: https://code.forgejo.org/forgejo/download-artifact@v4
         with:
@@ -277,7 +277,7 @@ jobs:
           mkdir -p ~/.ssh
           echo "$SSH_KEY" > ~/.ssh/tap_key
           chmod 600 ~/.ssh/tap_key
-          echo "forge.quinefoundation.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID2WBpBywsGATL7IMkvjlYguBfeYOxPstTcsPuH0Xdp3" > ~/.ssh/known_hosts
+          echo "[forge.quinefoundation.com]:2200 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHECXyh0SwRlXikgu919nC9OTmAU7AEcrlbJ/J/H9DTU" > ~/.ssh/known_hosts
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_key -o IdentitiesOnly=yes"
           git clone "$TAP_REPO" repo
           mkdir -p repo/Casks
