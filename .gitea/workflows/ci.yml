@@ -19,7 +19,7 @@ jobs:
 
       - name: Install Dagger CLI
         run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | BIN_DIR="$HOME/.local/bin" sh
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.20.6 BIN_DIR="$HOME/.local/bin" sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run CI (Dagger)
