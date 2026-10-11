@@ -57,9 +57,10 @@ just bundle          # or: ./desktop/scripts/build.sh
 
 This produces the platform's packaged app under
 `desktop/src-tauri/target/release/bundle/` (e.g. `macos/Quintodrome.app` on
-macOS). Cross-platform binaries are built in CI — see
-[`.github/workflows/desktop.yml`](.github/workflows/desktop.yml), which produces
-`.app`/`.dmg` on macOS and `.exe`/`.msi` on Windows for tagged releases.
+macOS). Release builds happen in Forgejo CI — see
+[`.gitea/workflows/desktop.yml`](.gitea/workflows/desktop.yml), which builds
+the macOS `.app`/`.dmg` (arm64 and x86_64) for tagged releases and updates the
+Homebrew tap.
 
 > Artifacts are unsigned (no Apple/Windows code-signing certs), so users will
 > see Gatekeeper/SmartScreen prompts.

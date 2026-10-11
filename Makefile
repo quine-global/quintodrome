@@ -70,7 +70,7 @@ test-js: ##@Development Run JS tests
 .PHONY: test-js
 
 test-i18n: ##@Development Validate all translations files
-	./.github/workflows/validate-translations.sh 
+	./scripts/validate-translations.sh 
 .PHONY: test-i18n
 
 install-golangci-lint: ##@Development Install golangci-lint if not present
