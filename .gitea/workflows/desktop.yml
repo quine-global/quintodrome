@@ -191,7 +191,7 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     env:
-      TAP_REPO: git@forge.quinefoundation.com:quine-global/homebrew-quintodrome.git
+      TAP_REPO: git@forge.quinefoundation.com:quine-global/homebrew-tap.git
     steps:
       - uses: https://code.forgejo.org/forgejo/download-artifact@v4
         with:
