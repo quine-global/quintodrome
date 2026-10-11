@@ -32,6 +32,23 @@ Batteries included:
 - **Native editing shortcuts** — Cmd+X/C/V/A/Z work in the web UI.
 - **Swipe navigation** — two-finger swipe back/forward on macOS.
 
+## Install
+
+On macOS, with [Homebrew](https://brew.sh):
+
+```sh
+brew tap quine/tap https://forge.quinefoundation.com/quine-global/homebrew-tap.git
+brew install --cask quintodrome
+```
+
+The tap URL is required: without one, `brew tap` assumes a GitHub repo. Update
+with `brew upgrade --cask quintodrome`.
+
+Or download the `.dmg` from the
+[releases page](https://forge.quinefoundation.com/quine-global/quintodrome/releases)
+(see [below](#macos-quintodrome-is-damaged-and-cant-be-opened) if macOS refuses
+to open it).
+
 ## Quick start
 
 ```sh
@@ -58,7 +75,7 @@ just bundle          # or: ./desktop/scripts/build.sh
 This produces the platform's packaged app under
 `desktop/src-tauri/target/release/bundle/` (e.g. `macos/Quintodrome.app` on
 macOS). Cross-platform binaries are built in CI — see
-[`.github/workflows/desktop.yml`](.github/workflows/desktop.yml), which produces
+[`.gitea/workflows/desktop.yml`](.gitea/workflows/desktop.yml), which produces
 `.app`/`.dmg` on macOS and `.exe`/`.msi` on Windows for tagged releases.
 
 > Artifacts are unsigned (no Apple/Windows code-signing certs), so users will
