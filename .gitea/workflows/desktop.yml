@@ -47,19 +47,19 @@ jobs:
           go-version-file: go.mod
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: https://github.com/dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: https://github.com/Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
 
       # Navidrome's sqlite_fts5 tag needs CGO, so on Windows we need a gcc.
       - name: Setup Windows CGO (mingw)
         if: runner.os == 'Windows'
-        uses: msys2/setup-msys2@v2
+        uses: https://github.com/msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           install: mingw-w64-x86_64-gcc
