@@ -41,7 +41,33 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
+      # actions/setup-go can't find the go it just installed on the host-mode
+      # Mac runner ("/bin/sh: version: command not found"), so fetch the
+      # latest patch of go.mod's Go release directly.
       - name: Setup Go
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          GO_MINOR=$(awk '/^go /{print $2}' go.mod)
+          GO_VERSION=$(curl -fsSL 'https://go.dev/dl/?mode=json&include=all' \
+            | jq -r --arg m "go$GO_MINOR" '[.[] | select(.stable) | .version | select(. == $m or startswith($m + "."))][0]')
+          case "$(uname -s)/$(uname -m)" in
+            Darwin/arm64) PLATFORM=darwin-arm64 ;;
+            Darwin/x86_64) PLATFORM=darwin-amd64 ;;
+            Linux/x86_64) PLATFORM=linux-amd64 ;;
+            Linux/aarch64) PLATFORM=linux-arm64 ;;
+          esac
+          GOROOT_PARENT="$RUNNER_TEMP/go-$GO_VERSION"
+          if [[ ! -x "$GOROOT_PARENT/go/bin/go" ]]; then
+            mkdir -p "$GOROOT_PARENT"
+            curl -fsSL "https://go.dev/dl/$GO_VERSION.$PLATFORM.tar.gz" | tar -xz -C "$GOROOT_PARENT"
+          fi
+          echo "$GOROOT_PARENT/go/bin" >> "$GITHUB_PATH"
+          "$GOROOT_PARENT/go/bin/go" version
+
+      - name: Setup Go (Windows)
+        if: runner.os == 'Windows'
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
