@@ -145,6 +145,9 @@ jobs:
         run: |
           cd desktop
           for TARGET in $(echo "${{ matrix.targets }}" | tr , " "); do
+            # rust-toolchain.toml pins a toolchain other than the one Setup
+            # Rust gave the targets to, so add each to the pinned one here.
+            rustup target add "$TARGET"
             npx --yes @tauri-apps/cli@2 build --target "$TARGET"
           done
 
