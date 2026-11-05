@@ -91,10 +91,12 @@ downloaded copies. After moving the app to `/Applications`, run:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/Quintodrome.app
-codesign --force --deep -s - /Applications/Quintodrome.app
 ```
 
-The Homebrew cask strips the quarantine flag automatically on install.
+The Homebrew cask strips the quarantine flag automatically on install. Don't
+re-sign the app with `codesign`: it's already ad-hoc signed, and rewriting the
+binaries in place can get the library scanner killed with "Code Signature
+Invalid".
 
 ## Configuration
 
