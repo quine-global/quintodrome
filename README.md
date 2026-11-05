@@ -32,6 +32,25 @@ Batteries included:
 - **Native editing shortcuts** — Cmd+X/C/V/A/Z work in the web UI.
 - **Swipe navigation** — two-finger swipe back/forward on macOS.
 
+## Install
+
+On macOS, with [Homebrew](https://brew.sh):
+
+```sh
+brew tap quine/tap https://forge.quinefoundation.com/quine-global/homebrew-tap.git
+brew trust quine/tap
+brew install --cask quintodrome
+```
+
+The tap URL is required: without one, `brew tap` assumes a GitHub repo. Homebrew
+refuses to load casks from a tap you haven't trusted, hence `brew trust`. Update
+with `brew upgrade --cask quintodrome`.
+
+Or download the `.dmg` from the
+[releases page](https://forge.quinefoundation.com/quine-global/quintodrome/releases)
+(see [below](#macos-quintodrome-is-damaged-and-cant-be-opened) if macOS refuses
+to open it).
+
 ## Quick start
 
 ```sh
