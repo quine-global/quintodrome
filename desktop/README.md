@@ -138,8 +138,12 @@ update itself (`src-tauri/src/updater.rs`).
   `SPARKLE_PRIVATE_KEY` Actions secret (base64 of the 32-byte seed, as Sparkle's
   `generate_keys -x` exports it). Sparkle refuses updates not signed with it.
   Lose the key and installed apps can't be updated by Sparkle any more.
-- **Version:** release builds take the tag's version (`v1.2.3` → `1.2.3`);
-  `tauri.conf.json`'s `0.1.0` is only for local builds.
+- **Version:** release builds take the tag's version (`v1.2.3` → `1.2.3`,
+  `CFBundleShortVersionString`, what people see); `tauri.conf.json`'s `0.1.0`
+  is only for local builds. Sparkle compares `CFBundleVersion` instead, and
+  ignores anything after a `-` (`1.0.0-alpha.10` and `1.0.0-alpha.11` are
+  the same to it), so that one is the release workflow's run number, which
+  only goes up, and so is the appcast's `sparkle:version`.
 - **Homebrew:** the cask says `auto_updates true`, so `brew upgrade` leaves
   the app to Sparkle (`brew upgrade --greedy` still upgrades it).
 - **Building:** `scripts/download-sparkle.sh src-tauri` fetches

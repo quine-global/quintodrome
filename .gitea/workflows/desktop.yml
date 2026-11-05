@@ -155,11 +155,15 @@ jobs:
         shell: bash
         run: |
           cd desktop
-          # The app's version is the tag's, so Sparkle can tell releases apart
-          # (tauri.conf.json's own is a placeholder for local builds).
+          # The app's version is the tag's (tauri.conf.json's own is a
+          # placeholder for local builds). Sparkle doesn't compare that one:
+          # it compares CFBundleVersion, and ignores everything after a "-",
+          # so 1.0.0-alpha.10 and 1.0.0-alpha.11 are the same to it. So
+          # CFBundleVersion is the run number, which only goes up; the appcast
+          # says the same (sparkle:version), and shows the tag's version.
           CONFIG=()
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            CONFIG=(--config "{\"version\":\"${GITHUB_REF_NAME#v}\"}")
+            CONFIG=(--config "{\"version\":\"${GITHUB_REF_NAME#v}\",\"bundle\":{\"macOS\":{\"bundleVersion\":\"$GITHUB_RUN_NUMBER\"}}}")
           fi
           for TARGET in $(echo "${{ matrix.targets }}" | tr , " "); do
             # rust-toolchain.toml pins a toolchain other than the one Setup
@@ -368,7 +372,7 @@ jobs:
               <title>Quintodrome</title>
               <item>
                 <title>Quintodrome $VERSION</title>
-                <sparkle:version>$VERSION</sparkle:version>
+                <sparkle:version>$GITHUB_RUN_NUMBER</sparkle:version>
                 <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
                 <pubDate>$PUB_DATE</pubDate>
                 <description><![CDATA[$(cat notes.html)]]></description>
