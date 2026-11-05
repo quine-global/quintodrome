@@ -254,12 +254,17 @@ jobs:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # The release notes are the tag's message (git tag -a … -m "…").
+          NOTES=$(curl -fsS "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/tags/$GITHUB_REF_NAME" \
+            -H "Authorization: token $TOKEN" | jq -r '.message // ""')
           # tag_name must be the pushed tag itself (with its "v"), or Forgejo
           # creates a second tag without it.
-          RELEASE_ID=$(curl -fsS -X POST "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/releases" \
-            -H "Authorization: token $TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{\"tag_name\":\"$GITHUB_REF_NAME\",\"name\":\"${GITHUB_REF_NAME#v}\",\"draft\":false}" \
+          RELEASE_ID=$(jq -n --arg tag "$GITHUB_REF_NAME" --arg name "${GITHUB_REF_NAME#v}" --arg body "$NOTES" \
+              '{tag_name: $tag, name: $name, body: $body, draft: false}' \
+            | curl -fsS -X POST "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/releases" \
+              -H "Authorization: token $TOKEN" \
+              -H "Content-Type: application/json" \
+              --data-binary @- \
             | jq -r '.id')
           for f in dist/*; do
             curl -fsS -X POST "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$(basename "$f")" \
@@ -333,6 +338,18 @@ jobs:
           CASK
           cat tap/Casks/quintodrome.rb
 
+      # Sparkle shows these in its update window: the tag's message, as HTML
+      # (escaped, one line per line).
+      - name: Release notes
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fsS "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/tags/$GITHUB_REF_NAME" \
+            -H "Authorization: token $TOKEN" | jq -r '.message // ""' \
+            | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/$/<br>/' > notes.html
+          cat notes.html
+
       # One appcast per architecture: Sparkle has no way to pick an
       # architecture's download out of one feed. The app reads them from the
       # tap through rgit (desktop/src-tauri/Info.plist, src/updater.rs).
@@ -354,6 +371,7 @@ jobs:
                 <sparkle:version>$VERSION</sparkle:version>
                 <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
                 <pubDate>$PUB_DATE</pubDate>
+                <description><![CDATA[$(cat notes.html)]]></description>
                 <enclosure url="$FORGE_URL/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/Quintodrome-$ARCH-apple-darwin.app.zip" type="application/octet-stream" $SIGNATURE/>
               </item>
             </channel>
