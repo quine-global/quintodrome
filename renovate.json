@@ -8,6 +8,7 @@
   "schedule": [
     "* 0-5 * * 1"
   ],
+  "prHourlyLimit": 20,
   "prConcurrentLimit": 5,
   "github-actions": {
     "managerFilePatterns": [
