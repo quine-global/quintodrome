@@ -1,11 +1,12 @@
 name: Desktop Release
 
 # Builds the Quintodrome desktop app (Tauri) for macOS (.app/.dmg), bundling
-# the Navidrome server as a sidecar, attaches the artifacts to the Forgejo
-# release on `v*` tags, and updates the Homebrew tap: the cask, and the
-# Sparkle appcasts the app checks for updates (one per architecture, signed
-# with the SPARKLE_PRIVATE_KEY secret; desktop/src-tauri/src/updater.rs). Windows isn't built here
-# (no Windows runner); the Windows steps below are kept for when one exists.
+# the Navidrome server as a sidecar. On `v*` tags the same job, on the Mac,
+# publishes the Forgejo release and updates the Homebrew tap: the cask, and
+# the Sparkle appcasts the app checks for updates (one per architecture,
+# signed with the SPARKLE_PRIVATE_KEY secret; desktop/src-tauri/src/
+# updater.rs). Windows isn't built here (no Windows runner); the Windows
+# steps below are kept for when one exists.
 #
 # Note: artifacts are not signed with Apple/Windows certs (macOS builds are only
 # ad-hoc signed), so users will hit Gatekeeper/SmartScreen prompts. The
@@ -185,7 +186,7 @@ jobs:
           ls -la dist
 
       # Sparkle only installs updates signed with the key whose public half is
-      # in Info.plist. The signatures go to the tap job, for the appcasts.
+      # in Info.plist. The signatures go into the appcasts (below).
       - name: Sign updates (macOS)
         if: runner.os == 'macOS'
         shell: bash
@@ -212,14 +213,6 @@ jobs:
             cat "sparkle/$ARCH.txt"
           done
 
-      - name: Upload update signatures (macOS)
-        if: runner.os == 'macOS' && hashFiles('sparkle/*.txt') != ''
-        uses: https://code.forgejo.org/forgejo/upload-artifact@v4
-        with:
-          name: sparkle-signatures
-          path: sparkle/*.txt
-          retention-days: 7
-
       - name: Collect artifacts (Windows)
         if: runner.os == 'Windows'
         shell: bash
@@ -239,21 +232,15 @@ jobs:
           path: dist/*
           retention-days: 7
 
-  release:
-    name: Publish Gitea release
-    needs: build-desktop
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: https://code.forgejo.org/forgejo/download-artifact@v4
-        with:
-          path: dist
-          pattern: desktop-*
-          merge-multiple: true
+      # The release itself happens here, on the Mac that built it, rather
+      # than in jobs of their own on the Linux runners: those queued for
+      # minutes behind CI runs, for a few curl calls and a git push. It runs
+      # in the runner's own account (host mode), so everything it writes
+      # stays in the job's directory or $RUNNER_TEMP, never in ~/.ssh.
 
-      - run: ls -R dist
-
-      - name: Create release and upload assets
+      - name: Publish release (macOS)
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
+        shell: bash
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -261,6 +248,7 @@ jobs:
           # The release notes are the tag's message (git tag -a … -m "…").
           NOTES=$(curl -fsS "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/tags/$GITHUB_REF_NAME" \
             -H "Authorization: token $TOKEN" | jq -r '.message // ""')
+          printf '%s\n' "$NOTES" > notes.txt
           # tag_name must be the pushed tag itself (with its "v"), or Forgejo
           # creates a second tag without it.
           RELEASE_ID=$(jq -n --arg tag "$GITHUB_REF_NAME" --arg name "${GITHUB_REF_NAME#v}" --arg body "$NOTES" \
@@ -271,45 +259,34 @@ jobs:
               --data-binary @- \
             | jq -r '.id')
           for f in dist/*; do
-            curl -fsS -X POST "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$(basename "$f")" \
+            curl -fsS -o /dev/null -X POST "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$(basename "$f")" \
               -H "Authorization: token $TOKEN" \
               -H "Content-Type: application/octet-stream" \
               --data-binary @"$f"
+            echo "uploaded $(basename "$f")"
           done
 
-  homebrew-tap:
-    name: Update Homebrew tap
-    needs: release
-    runs-on: ubuntu-latest
-    env:
-      TAP_REPO: ssh://git@forge.quinefoundation.com:2200/quine-global/homebrew-tap.git # Forgejo SSH is on 2200; 22 is the host's sshd
-      # Where the cask and the appcasts download releases from. The forge is
-      # tailnet-only, so for now so are installs and updates. $GITHUB_SERVER_URL
-      # is how the runner reaches Forgejo, not an address for users.
-      FORGE_URL: https://forge.in.quineglobal.com
-      # The public view of the repos (rgit).
-      GIT_URL: https://git.quineglobal.com
-    steps:
-      - uses: https://code.forgejo.org/forgejo/download-artifact@v4
-        with:
-          path: dist
-          pattern: desktop-macos
-          merge-multiple: true
-
-      - uses: https://code.forgejo.org/forgejo/download-artifact@v4
-        with:
-          name: sparkle-signatures
-          path: sparkle
-
-      # The app is only ad-hoc signed, so the cask strips the quarantine flag
-      # that Homebrew adds; otherwise Gatekeeper refuses to open it.
-      - name: Write cask
+      # The cask, and one Sparkle appcast per architecture (Sparkle has no
+      # way to pick an architecture's download out of one feed). The app
+      # reads the appcasts from the tap through rgit (desktop/src-tauri/
+      # Info.plist, src/updater.rs). The app is only ad-hoc signed, so the
+      # cask strips the quarantine flag that Homebrew adds; otherwise
+      # Gatekeeper refuses to open it.
+      - name: Write cask and appcasts (macOS)
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          # Where the cask and the appcasts download releases from. The forge
+          # is tailnet-only, so for now so are installs and updates.
+          FORGE_URL: https://forge.in.quineglobal.com
+          # The public view of the repos (rgit).
+          GIT_URL: https://git.quineglobal.com
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          ARM_SHA=$(sha256sum dist/Quintodrome-aarch64-apple-darwin.app.zip | cut -d' ' -f1)
-          INTEL_SHA=$(sha256sum dist/Quintodrome-x86_64-apple-darwin.app.zip | cut -d' ' -f1)
-          mkdir -p tap/Casks
+          ARM_SHA=$(shasum -a 256 dist/Quintodrome-aarch64-apple-darwin.app.zip | cut -d' ' -f1)
+          INTEL_SHA=$(shasum -a 256 dist/Quintodrome-x86_64-apple-darwin.app.zip | cut -d' ' -f1)
+          mkdir -p tap/Casks tap/appcasts
           cat > tap/Casks/quintodrome.rb <<CASK
           cask "quintodrome" do
             arch arm: "aarch64", intel: "x86_64"
@@ -342,27 +319,11 @@ jobs:
           CASK
           cat tap/Casks/quintodrome.rb
 
-      # Sparkle shows these in its update window: the tag's message, as HTML
-      # (escaped, one line per line).
-      - name: Release notes
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          curl -fsS "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/tags/$GITHUB_REF_NAME" \
-            -H "Authorization: token $TOKEN" | jq -r '.message // ""' \
-            | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/$/<br>/' > notes.html
-          cat notes.html
-
-      # One appcast per architecture: Sparkle has no way to pick an
-      # architecture's download out of one feed. The app reads them from the
-      # tap through rgit (desktop/src-tauri/Info.plist, src/updater.rs).
-      - name: Write appcasts
-        run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          PUB_DATE=$(date -R)
-          mkdir -p tap/appcasts
+          # Sparkle shows the notes in its update window: the tag's message,
+          # as HTML (escaped, one line per line).
+          NOTES_HTML=$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/$/<br>/' notes.txt)
+          # RFC 822, in English whatever the Mac's locale (BSD date has no -R).
+          PUB_DATE=$(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000')
           for ARCH in aarch64 x86_64; do
             SIGNATURE=$(cat "sparkle/$ARCH.txt")
             cat > "tap/appcasts/quintodrome-$ARCH.xml" <<APPCAST
@@ -375,7 +336,7 @@ jobs:
                 <sparkle:version>$GITHUB_RUN_NUMBER</sparkle:version>
                 <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
                 <pubDate>$PUB_DATE</pubDate>
-                <description><![CDATA[$(cat notes.html)]]></description>
+                <description><![CDATA[$NOTES_HTML]]></description>
                 <enclosure url="$FORGE_URL/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/Quintodrome-$ARCH-apple-darwin.app.zip" type="application/octet-stream" $SIGNATURE/>
               </item>
             </channel>
@@ -384,28 +345,35 @@ jobs:
             cat "tap/appcasts/quintodrome-$ARCH.xml"
           done
 
-      - name: Push to tap
+      - name: Push to tap (macOS)
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
+        shell: bash
         env:
           SSH_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
+          TAP_REPO: ssh://git@forge.in.quineglobal.com:2200/quine-global/homebrew-tap.git # Forgejo SSH is on 2200; 22 is the host's sshd
         run: |
           set -euo pipefail
           if [[ -z "$SSH_KEY" ]]; then
             echo "::error::HOMEBREW_TAP_SSH_KEY secret is not set (add it under this repo's Settings > Actions > Secrets; its public key needs write access on the tap repo)"
             exit 1
           fi
-          mkdir -p ~/.ssh
-          echo "$SSH_KEY" > ~/.ssh/tap_key
-          chmod 600 ~/.ssh/tap_key
-          echo "[forge.quinefoundation.com]:2200 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHECXyh0SwRlXikgu919nC9OTmAU7AEcrlbJ/J/H9DTU" > ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_key -o IdentitiesOnly=yes"
-          git clone "$TAP_REPO" repo
+          # The key and known_hosts live in $RUNNER_TEMP, not the Mac
+          # account's ~/.ssh.
+          KEY_FILE="$RUNNER_TEMP/tap_key"
+          KNOWN_HOSTS="$RUNNER_TEMP/tap_known_hosts"
+          trap 'rm -f "$KEY_FILE" "$KNOWN_HOSTS"' EXIT
+          (umask 077; printf '%s\n' "$SSH_KEY" > "$KEY_FILE")
+          echo "[forge.in.quineglobal.com]:2200 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHECXyh0SwRlXikgu919nC9OTmAU7AEcrlbJ/J/H9DTU" > "$KNOWN_HOSTS"
+          export GIT_SSH_COMMAND="ssh -i $KEY_FILE -o IdentitiesOnly=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes"
+          rm -rf repo
+          git clone -q "$TAP_REPO" repo
           mkdir -p repo/Casks repo/appcasts
           cp tap/Casks/quintodrome.rb repo/Casks/
           cp tap/appcasts/quintodrome-*.xml repo/appcasts/
           cd repo
           git config user.name "Quintodrome release"
-          git config user.email "noreply@forge.quinefoundation.com"
+          git config user.email "noreply@forge.in.quineglobal.com"
           git add Casks/quintodrome.rb appcasts/quintodrome-*.xml
           git diff --cached --quiet && { echo "Cask and appcasts unchanged"; exit 0; }
-          git commit -m "quintodrome ${GITHUB_REF_NAME#v}"
-          git push
+          git commit -q -m "quintodrome ${GITHUB_REF_NAME#v}"
+          git push -q
