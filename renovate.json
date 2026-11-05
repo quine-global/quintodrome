@@ -1,0 +1,59 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Update PRs on the forge, from Renovate on the forge VM (petersweb-infra's nixos/renovate.nix, docs/RENOVATE.md).",
+  "extends": [
+    "config:recommended"
+  ],
+  "timezone": "America/Anchorage",
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "prConcurrentLimit": 5,
+  "github-actions": {
+    "managerFilePatterns": [
+      "/^\\.gitea/workflows/[^/]+\\.ya?ml$/"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "Navidrome's own Go dependencies (the root go.mod) come with upstream merges; bumping them here would conflict with every merge. The dagger module's .dagger/go.mod is ours.",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchFileNames": [
+        "go.mod"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "The web UI (ui/): minor and patch updates together, in one PR a week.",
+      "matchFileNames": [
+        "ui/**"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "web UI dependencies (minor)"
+    },
+    {
+      "description": "The desktop app (Tauri, Sparkle plugin, …): minor and patch updates together.",
+      "matchFileNames": [
+        "desktop/**"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "desktop app dependencies (minor)"
+    },
+    {
+      "description": "Dagger's SDK has to match the engine (dagger.json's engineVersion, ci.yml's DAGGER_VERSION, and petersweb-infra's dagger-engine): move them together, by hand.",
+      "matchPackageNames": [
+        "dagger.io/dagger",
+        "github.com/dagger/**"
+      ],
+      "enabled": false
+    }
+  ]
+}
