@@ -44,7 +44,7 @@ var svcCmd = &cobra.Command{
 }
 
 type svcControl struct {
-	ctx    context.Context
+	ctx    context.Context //nolint:containedctx // service lifecycle ctx, cancelled by Stop
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -53,8 +53,13 @@ func (p *svcControl) Start(service.Service) error {
 	p.done = make(chan struct{})
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	go func() {
-		runNavidrome(p.ctx)
+		err := runNavidrome(p.ctx)
 		close(p.done)
+		// service.Run() only returns when it gets a stop request, so exit here to let the
+		// service manager see the failure and restart the service
+		if err != nil {
+			log.Fatal("Fatal error in Navidrome. Aborting", err)
+		}
 	}()
 	return nil
 }
@@ -74,7 +79,7 @@ func (p *svcControl) Stop(service.Service) error {
 var svcInstance = sync.OnceValue(func() service.Service {
 	options := make(service.KeyValue)
 	options["Restart"] = "on-failure"
-	options["SuccessExitStatus"] = "1 2 8 SIGKILL"
+	options["SuccessExitStatus"] = "SIGKILL"
 	options["UserService"] = false
 	options["LogDirectory"] = conf.Server.DataFolder.String()
 	options["SystemdScript"] = systemdScript
@@ -232,22 +237,21 @@ func buildExecuteCmd() *cobra.Command {
 }
 
 const systemdScript = `[Unit]
-Description={{.Description}}
-ConditionFileIsExecutable={{.Path|cmdEscape}}
-{{range $i, $dep := .Dependencies}} 
-{{$dep}} {{end}}
-
+Description={{Description}}
+ConditionFileIsExecutable={{Path | cmdEscape}}
+{{range Dependencies}}{{.}}
+{{end}}
 [Service]
 StartLimitInterval=5
 StartLimitBurst=10
-ExecStart={{.Path|cmdEscape}}{{range .Arguments}} {{.|cmd}}{{end}}
-{{if .WorkingDirectory}}WorkingDirectory={{.WorkingDirectory|cmdEscape}}{{end}}
-{{if .UserName}}User={{.UserName}}{{end}}
-{{if .Restart}}Restart={{.Restart}}{{end}}
-{{if .SuccessExitStatus}}SuccessExitStatus={{.SuccessExitStatus}}{{end}}
+ExecStart={{Path | cmdEscape}}{{range Arguments}} {{. | cmd}}{{end}}
+{{if WorkingDirectory}}WorkingDirectory={{WorkingDirectory | cmdEscape}}{{end}}
+{{if UserName}}User={{UserName}}{{end}}
+{{if Restart}}Restart={{Restart}}{{end}}
+{{if SuccessExitStatus}}SuccessExitStatus={{SuccessExitStatus}}{{end}}
 TimeoutStopSec=20
 RestartSec=120
-EnvironmentFile=-/etc/sysconfig/{{.Name}}
+EnvironmentFile=-/etc/sysconfig/{{Name}}
 Environment="ND_SYSTEMD_PRIORITY_LOGGING=1"
 
 DevicePolicy=closed
@@ -260,7 +264,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictNamespaces=yes
 RestrictRealtime=yes
 SystemCallFilter=~@clock @debug @module @mount @obsolete @reboot @setuid @swap
-{{if .WorkingDirectory}}ReadWritePaths={{.WorkingDirectory|cmdEscape}}{{end}}
+{{if WorkingDirectory}}ReadWritePaths={{WorkingDirectory | cmdEscape}}{{end}}
 ProtectSystem=full
 
 [Install]

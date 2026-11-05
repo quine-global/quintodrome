@@ -6,6 +6,7 @@ import (
 
 	"github.com/navidrome/navidrome/core/agents"
 	"github.com/navidrome/navidrome/plugins/capabilities"
+	"github.com/navidrome/navidrome/plugins/types"
 	"github.com/navidrome/navidrome/utils/slice"
 )
 
@@ -49,6 +50,18 @@ func newMetadataAgent(p *plugin) *MetadataAgent {
 	return &MetadataAgent{name: p.name, plugin: p}
 }
 
+// agentErr keeps a plugin fault distinguishable from a definitive miss: a method the plugin
+// simply does not implement has answered, so it must not count against a caller's back-off.
+func agentErr(err error) error {
+	if errors.Is(err, errNotImplemented) || errors.Is(err, errFunctionNotFound) {
+		return errors.Join(agents.ErrNotFound, err)
+	}
+	if retryLater, ok := parseRetryLater(agentRetryLaterRe, err.Error()); ok {
+		return errors.Join(retryLater, err)
+	}
+	return err
+}
+
 // MetadataAgent is an adapter that wraps an Extism plugin and implements
 // the agents interfaces for metadata retrieval.
 type MetadataAgent struct {
@@ -68,7 +81,7 @@ func (a *MetadataAgent) GetArtistMBID(ctx context.Context, id string, name strin
 	input := capabilities.ArtistMBIDRequest{ID: id, Name: name}
 	result, err := callPluginFunction[capabilities.ArtistMBIDRequest, *capabilities.ArtistMBIDResponse](ctx, a.plugin, FuncGetArtistMBID, input)
 	if err != nil {
-		return "", errors.Join(agents.ErrNotFound, err)
+		return "", agentErr(err)
 	}
 
 	if result == nil || result.MBID == "" {
@@ -83,7 +96,7 @@ func (a *MetadataAgent) GetArtistURL(ctx context.Context, id, name, mbid string)
 	input := capabilities.ArtistRequest{ID: id, Name: name, MBID: mbid}
 	result, err := callPluginFunction[capabilities.ArtistRequest, *capabilities.ArtistURLResponse](ctx, a.plugin, FuncGetArtistURL, input)
 	if err != nil {
-		return "", errors.Join(agents.ErrNotFound, err)
+		return "", agentErr(err)
 	}
 	if result == nil || result.URL == "" {
 		return "", agents.ErrNotFound
@@ -96,7 +109,7 @@ func (a *MetadataAgent) GetArtistBiography(ctx context.Context, id, name, mbid s
 	input := capabilities.ArtistRequest{ID: id, Name: name, MBID: mbid}
 	result, err := callPluginFunction[capabilities.ArtistRequest, *capabilities.ArtistBiographyResponse](ctx, a.plugin, FuncGetArtistBiography, input)
 	if err != nil {
-		return "", errors.Join(agents.ErrNotFound, err)
+		return "", agentErr(err)
 	}
 
 	if result == nil || result.Biography == "" {
@@ -111,7 +124,7 @@ func (a *MetadataAgent) GetSimilarArtists(ctx context.Context, id, name, mbid st
 	input := capabilities.SimilarArtistsRequest{ID: id, Name: name, MBID: mbid, Limit: int32(limit)}
 	result, err := callPluginFunction[capabilities.SimilarArtistsRequest, *capabilities.SimilarArtistsResponse](ctx, a.plugin, FuncGetSimilarArtists, input)
 	if err != nil {
-		return nil, errors.Join(agents.ErrNotFound, err)
+		return nil, agentErr(err)
 	}
 
 	if result == nil || len(result.Artists) == 0 {
@@ -131,7 +144,7 @@ func (a *MetadataAgent) GetArtistImages(ctx context.Context, id, name, mbid stri
 	input := capabilities.ArtistRequest{ID: id, Name: name, MBID: mbid}
 	result, err := callPluginFunction[capabilities.ArtistRequest, *capabilities.ArtistImagesResponse](ctx, a.plugin, FuncGetArtistImages, input)
 	if err != nil {
-		return nil, errors.Join(agents.ErrNotFound, err)
+		return nil, agentErr(err)
 	}
 
 	if result == nil || len(result.Images) == 0 {
@@ -151,7 +164,7 @@ func (a *MetadataAgent) GetArtistTopSongs(ctx context.Context, id, artistName, m
 	input := capabilities.TopSongsRequest{ID: id, Name: artistName, MBID: mbid, Count: int32(count)}
 	result, err := callPluginFunction[capabilities.TopSongsRequest, *capabilities.TopSongsResponse](ctx, a.plugin, FuncGetArtistTopSongs, input)
 	if err != nil {
-		return nil, errors.Join(agents.ErrNotFound, err)
+		return nil, agentErr(err)
 	}
 
 	if result == nil || len(result.Songs) == 0 {
@@ -166,7 +179,7 @@ func (a *MetadataAgent) GetAlbumInfo(ctx context.Context, name, artist, mbid str
 	input := capabilities.AlbumRequest{Name: name, Artist: artist, MBID: mbid}
 	result, err := callPluginFunction[capabilities.AlbumRequest, *capabilities.AlbumInfoResponse](ctx, a.plugin, FuncGetAlbumInfo, input)
 	if err != nil {
-		return nil, errors.Join(agents.ErrNotFound, err)
+		return nil, agentErr(err)
 	}
 
 	if result == nil {
@@ -186,7 +199,7 @@ func (a *MetadataAgent) GetAlbumImages(ctx context.Context, name, artist, mbid s
 	input := capabilities.AlbumRequest{Name: name, Artist: artist, MBID: mbid}
 	result, err := callPluginFunction[capabilities.AlbumRequest, *capabilities.AlbumImagesResponse](ctx, a.plugin, FuncGetAlbumImages, input)
 	if err != nil {
-		return nil, errors.Join(agents.ErrNotFound, err)
+		return nil, agentErr(err)
 	}
 
 	if result == nil || len(result.Images) == 0 {
@@ -204,7 +217,7 @@ func (a *MetadataAgent) GetAlbumImages(ctx context.Context, name, artist, mbid s
 func callSimilarSongsPluginFunction[T any](ctx context.Context, plugin *plugin, funcName string, input T) ([]agents.Song, error) {
 	result, err := callPluginFunction[T, *capabilities.SimilarSongsResponse](ctx, plugin, funcName, input)
 	if err != nil {
-		return nil, err
+		return nil, agentErr(err)
 	}
 	if result == nil || len(result.Songs) == 0 {
 		return nil, agents.ErrNotFound
@@ -227,23 +240,34 @@ func (a *MetadataAgent) GetSimilarSongsByArtist(ctx context.Context, id, name, m
 	return callSimilarSongsPluginFunction[capabilities.SimilarSongsByArtistRequest](ctx, a.plugin, FuncGetSimilarSongsByArtist, capabilities.SimilarSongsByArtistRequest{ID: id, Name: name, MBID: mbid, Count: int32(count)})
 }
 
-// songRefToAgentSong converts a single SongRef to agents.Song
-func songRefToAgentSong(s capabilities.SongRef) agents.Song {
+// songRefToAgentSong converts a single SongRef to agents.Song. SongRef keeps the single
+// Artist/ArtistMBID fields as part of the plugin wire contract; when a plugin sends those instead
+// of the artists array, they are folded into a one-element Artists list here.
+func songRefToAgentSong(s types.SongRef) agents.Song {
+	var artists []agents.Artist
+	switch {
+	case len(s.Artists) > 0:
+		artists = make([]agents.Artist, len(s.Artists))
+		for i, a := range s.Artists {
+			artists[i] = agents.Artist{ID: a.ID, Name: a.Name, MBID: a.MBID}
+		}
+	case s.Artist != "" || s.ArtistMBID != "":
+		artists = []agents.Artist{{Name: s.Artist, MBID: s.ArtistMBID}}
+	}
 	return agents.Song{
-		ID:         s.ID,
-		Name:       s.Name,
-		MBID:       s.MBID,
-		ISRC:       s.ISRC,
-		Artist:     s.Artist,
-		ArtistMBID: s.ArtistMBID,
-		Album:      s.Album,
-		AlbumMBID:  s.AlbumMBID,
-		Duration:   uint32(s.Duration * 1000),
+		ID:        s.ID,
+		Name:      s.Name,
+		MBID:      s.MBID,
+		ISRC:      s.ISRC,
+		Artists:   artists,
+		Album:     s.Album,
+		AlbumMBID: s.AlbumMBID,
+		Duration:  s.DurationInMs(),
 	}
 }
 
 // songRefsToAgentSongs converts a slice of SongRef to agents.Song
-func songRefsToAgentSongs(refs []capabilities.SongRef) []agents.Song {
+func songRefsToAgentSongs(refs []types.SongRef) []agents.Song {
 	return slice.Map(refs, songRefToAgentSong)
 }
 

@@ -42,10 +42,17 @@ func (m *Quintodrome) LintGo(ctx context.Context, src *dagger.Directory) error {
 	_, err := goContainer().
 		WithDirectory("/repo", src).
 		WithWorkdir("/repo").
-		// Fetch the release tarball directly instead of the install script,
-		// whose hardcoded SHA256 for v2.12.0 doesn't match the re-uploaded
-		// release tarball.
-		WithExec([]string{"sh", "-c", "curl -sSfL https://github.com/golangci/golangci-lint/releases/download/v2.12.0/golangci-lint-2.12.0-linux-amd64.tar.gz | tar -xz --strip-components=1 -C /usr/local/bin"}).
+		// The version upstream pins (Makefile's GOLANGCI_LINT_VERSION), so it
+		// moves with upstream merges; one built with an older Go refuses a
+		// go.mod that needs a newer one. The release tarball directly, not the
+		// install script (whose hardcoded SHA256 for v2.12.0 didn't match the
+		// re-uploaded tarball), for this machine's architecture.
+		WithExec([]string{"sh", "-c", `
+set -e
+v=$(grep '^GOLANGCI_LINT_VERSION' Makefile | cut -d ' ' -f 3)
+v=${v#v}
+curl -sSfL "https://github.com/golangci/golangci-lint/releases/download/v$v/golangci-lint-$v-linux-$(go env GOARCH).tar.gz" | tar -xz --strip-components=1 -C /usr/local/bin
+`}).
 		WithExec([]string{"golangci-lint", "run", "--timeout", "2m"}).
 		Sync(ctx)
 	return err
@@ -127,7 +134,7 @@ func (m *Quintodrome) TestJS(ctx context.Context, src *dagger.Directory) error {
 
 func goContainer() *dagger.Container {
 	return dag.Container().
-		From("golang:1.26").
+		From("golang:1.27").
 		WithExec([]string{"apt-get", "update"}).
 		WithExec([]string{"apt-get", "install", "-y", "zip"}).
 		WithMountedCache("/go/pkg/mod", dag.CacheVolume("quintodrome-go-mod")).

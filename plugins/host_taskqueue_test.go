@@ -1,5 +1,3 @@
-//go:build !windows
-
 package plugins
 
 import (
@@ -42,15 +40,11 @@ var _ = Describe("TaskQueueService", func() {
 		DeferCleanup(configtest.SetupConfig())
 		conf.Server.DataFolder = conf.NewDir(tmpDir)
 
-		// Create a mock manager with context
-		managerCtx, cancel := context.WithCancel(ctx)
 		manager = &Manager{
 			plugins: make(map[string]*plugin),
-			ctx:     managerCtx,
 		}
-		DeferCleanup(cancel)
 
-		service, err = newTaskQueueService("test_plugin", manager, 5)
+		service, err = newTaskQueueService(ctx, "test_plugin", manager, 5)
 		Expect(err).ToNot(HaveOccurred())
 	})
 
@@ -695,11 +689,12 @@ var _ = Describe("TaskQueueService", func() {
 			copy(times, dispatchTimes)
 			mu.Unlock()
 
-			// Consecutive dispatches should have at least ~160ms gap (80% of 200ms)
+			// Wake-up latency varies per worker, so check offsets from the first dispatch, not gaps.
 			for i := 1; i < len(times); i++ {
-				gap := times[i].Sub(times[i-1])
-				Expect(gap).To(BeNumerically(">=", 160*time.Millisecond),
-					fmt.Sprintf("gap between dispatch %d and %d was %v, expected >= 160ms", i-1, i, gap))
+				offset := times[i].Sub(times[0])
+				minOffset := time.Duration(i)*200*time.Millisecond - 50*time.Millisecond
+				Expect(offset).To(BeNumerically(">=", minOffset),
+					fmt.Sprintf("dispatch %d ran %v after the first, expected >= %v", i, offset, minOffset))
 			}
 		})
 	})
@@ -730,14 +725,11 @@ var _ = Describe("TaskQueueService", func() {
 			service.Close()
 
 			// Create a new service pointing to the same DB
-			managerCtx2, cancel2 := context.WithCancel(ctx)
-			DeferCleanup(cancel2)
 			manager2 := &Manager{
 				plugins: make(map[string]*plugin),
-				ctx:     managerCtx2,
 			}
 
-			service, err = newTaskQueueService("test_plugin", manager2, 5)
+			service, err = newTaskQueueService(ctx, "test_plugin", manager2, 5)
 			Expect(err).ToNot(HaveOccurred())
 
 			// Override callback to succeed
@@ -775,14 +767,11 @@ var _ = Describe("TaskQueueService", func() {
 
 	Describe("Plugin isolation", func() {
 		It("uses separate databases for different plugins", func() {
-			managerCtx2, cancel2 := context.WithCancel(ctx)
-			DeferCleanup(cancel2)
 			manager2 := &Manager{
 				plugins: make(map[string]*plugin),
-				ctx:     managerCtx2,
 			}
 
-			service2, err := newTaskQueueService("other_plugin", manager2, 5)
+			service2, err := newTaskQueueService(ctx, "other_plugin", manager2, 5)
 			Expect(err).ToNot(HaveOccurred())
 			defer service2.Close()
 

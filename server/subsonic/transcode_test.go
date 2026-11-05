@@ -4,11 +4,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 
+	"github.com/navidrome/navidrome/core/ffmpeg"
 	"github.com/navidrome/navidrome/core/stream"
 	"github.com/navidrome/navidrome/model"
+	"github.com/navidrome/navidrome/model/request"
+	"github.com/navidrome/navidrome/server/subsonic/responses"
 	"github.com/navidrome/navidrome/tests"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -74,6 +79,47 @@ var _ = Describe("Transcode endpoints", func() {
 			_, err := router.GetTranscodeDecision(w, r)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("error retrieving media file"))
+		})
+
+		It("enriches the decision error with the reason, without leaking the file path", func() {
+			mockMFRepo.SetData(model.MediaFiles{{ID: "song-1", Suffix: "flac"}})
+			mockTD.decisionErr = fmt.Errorf("probing media file song-1: %w",
+				&ffmpeg.ProbeError{Path: "/music/secret/foo.flac", Reason: "the file: Invalid data found when processing input"})
+			r := newJSONPostRequest("mediaId=song-1&mediaType=song", "{}")
+			_, err := router.GetTranscodeDecision(w, r)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to make transcode decision"))
+			Expect(err.Error()).To(ContainSubstring("Invalid data found when processing input"))
+			Expect(err.Error()).ToNot(ContainSubstring("/music/secret"))
+			var subErr subError
+			Expect(errors.As(err, &subErr)).To(BeTrue())
+			Expect(subErr.code).To(Equal(responses.ErrorGeneric))
+		})
+
+		It("returns ErrorDataNotFound when the source file is missing on disk", func() {
+			mockMFRepo.SetData(model.MediaFiles{{ID: "song-1", Suffix: "flac"}})
+			mockTD.decisionErr = fmt.Errorf("probing media file song-1: %w",
+				&ffmpeg.ProbeError{Path: "/music/gone.flac", Reason: "file not found", NotFound: true})
+			r := newJSONPostRequest("mediaId=song-1&mediaType=song", "{}")
+			_, err := router.GetTranscodeDecision(w, r)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("file not found"))
+			var subErr subError
+			Expect(errors.As(err, &subErr)).To(BeTrue())
+			Expect(subErr.code).To(Equal(responses.ErrorDataNotFound))
+		})
+
+		It("keeps ErrorGeneric when ffprobe is missing, even though the cause wraps fs.ErrNotExist", func() {
+			mockMFRepo.SetData(model.MediaFiles{{ID: "song-1", Suffix: "flac"}})
+			pe := &ffmpeg.ProbeError{Path: "/music/song.flac", Reason: "could not read file"}
+			mockTD.decisionErr = fmt.Errorf("probing media file song-1: %w (%w)", pe, fs.ErrNotExist)
+			Expect(errors.Is(mockTD.decisionErr, fs.ErrNotExist)).To(BeTrue())
+			r := newJSONPostRequest("mediaId=song-1&mediaType=song", "{}")
+			_, err := router.GetTranscodeDecision(w, r)
+			Expect(err).To(HaveOccurred())
+			var subErr subError
+			Expect(errors.As(err, &subErr)).To(BeTrue())
+			Expect(subErr.code).To(Equal(responses.ErrorGeneric))
 		})
 
 		It("returns error when body is empty", func() {
@@ -205,7 +251,7 @@ var _ = Describe("Transcode endpoints", func() {
 
 		It("includes transcode stream when transcoding", func() {
 			mockMFRepo.SetData(model.MediaFiles{
-				{ID: "song-2", Suffix: "flac", Codec: "FLAC", BitRate: 1000, Channels: 2, SampleRate: 96000, BitDepth: 24},
+				{ID: "song-2", Suffix: "flac", Codec: "FLAC", BitRate: 1000, Channels: 2, SampleRate: 96000, BitDepth: new(24)},
 			})
 			mockTD.decision = &stream.TranscodeDecision{
 				MediaID:          "song-2",
@@ -233,6 +279,184 @@ var _ = Describe("Transcode endpoints", func() {
 			Expect(resp.TranscodeDecision.TranscodeReasons).To(ConsistOf("container not supported"))
 			Expect(resp.TranscodeDecision.TranscodeStream).ToNot(BeNil())
 			Expect(resp.TranscodeDecision.TranscodeStream.Container).To(Equal("mp3"))
+		})
+
+		Describe("player MaxBitRate cap", func() {
+			withPlayer := func(r *http.Request, maxBitRate int) *http.Request {
+				ctx := request.WithPlayer(r.Context(), model.Player{Client: "NavidromeUI", MaxBitRate: maxBitRate})
+				return r.WithContext(ctx)
+			}
+
+			BeforeEach(func() {
+				mockMFRepo.SetData(model.MediaFiles{
+					{ID: "song-1", Suffix: "flac", Codec: "FLAC", BitRate: 900, Channels: 2, SampleRate: 44100},
+				})
+				mockTD.decision = &stream.TranscodeDecision{MediaID: "song-1", CanDirectPlay: true}
+				mockTD.token = "token"
+			})
+
+			It("caps client MaxAudioBitrate at the player MaxBitRate when client declares none", func() {
+				body := `{"directPlayProfiles":[{"containers":["flac"],"protocols":["http"]}]}`
+				r := withPlayer(newJSONPostRequest("mediaId=song-1&mediaType=song", body), 320)
+
+				_, err := router.GetTranscodeDecision(w, r)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(mockTD.capturedClient).ToNot(BeNil())
+				Expect(mockTD.capturedClient.MaxAudioBitrate).To(Equal(320))
+				Expect(mockTD.capturedClient.MaxTranscodingAudioBitrate).To(Equal(320))
+			})
+
+			It("does not raise a lower client-declared limit", func() {
+				// Client declares 192 kbps (192000 bps); player cap is 320 — client wins.
+				body := `{"maxAudioBitrate":192000,"directPlayProfiles":[{"containers":["flac"],"protocols":["http"]}]}`
+				r := withPlayer(newJSONPostRequest("mediaId=song-1&mediaType=song", body), 320)
+
+				_, err := router.GetTranscodeDecision(w, r)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(mockTD.capturedClient.MaxAudioBitrate).To(Equal(192))
+			})
+
+			It("lowers a higher client-declared limit to the player cap", func() {
+				// Client declares 320 kbps (320000 bps); player cap is 192 — player wins.
+				body := `{"maxAudioBitrate":320000,"directPlayProfiles":[{"containers":["flac"],"protocols":["http"]}]}`
+				r := withPlayer(newJSONPostRequest("mediaId=song-1&mediaType=song", body), 192)
+
+				_, err := router.GetTranscodeDecision(w, r)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(mockTD.capturedClient.MaxAudioBitrate).To(Equal(192))
+				Expect(mockTD.capturedClient.MaxTranscodingAudioBitrate).To(Equal(192))
+			})
+
+			It("does nothing when no player is in context", func() {
+				body := `{"maxAudioBitrate":320000,"directPlayProfiles":[{"containers":["flac"],"protocols":["http"]}]}`
+				r := newJSONPostRequest("mediaId=song-1&mediaType=song", body)
+
+				_, err := router.GetTranscodeDecision(w, r)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(mockTD.capturedClient.MaxAudioBitrate).To(Equal(320))
+			})
+
+			It("does nothing when player MaxBitRate is 0", func() {
+				body := `{"maxAudioBitrate":320000,"directPlayProfiles":[{"containers":["flac"],"protocols":["http"]}]}`
+				r := withPlayer(newJSONPostRequest("mediaId=song-1&mediaType=song", body), 0)
+
+				_, err := router.GetTranscodeDecision(w, r)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(mockTD.capturedClient.MaxAudioBitrate).To(Equal(320))
+			})
+		})
+
+		Describe("player forced format", func() {
+			withForcedFormat := func(r *http.Request, format string, maxBitRate int) *http.Request {
+				ctx := r.Context()
+				ctx = request.WithTranscoding(ctx, model.Transcoding{TargetFormat: format})
+				if maxBitRate > 0 {
+					ctx = request.WithPlayer(ctx, model.Player{Client: "NavidromeUI", MaxBitRate: maxBitRate})
+				}
+				return r.WithContext(ctx)
+			}
+
+			BeforeEach(func() {
+				mockMFRepo.SetData(model.MediaFiles{
+					{ID: "song-1", Suffix: "flac", Codec: "FLAC", BitRate: 900, Channels: 2, SampleRate: 44100},
+				})
+				mockTD.decision = &stream.TranscodeDecision{MediaID: "song-1", CanTranscode: true}
+				mockTD.token = "token"
+			})
+
+			It("forces a supported format and narrows direct play to it", func() {
+				body := `{"directPlayProfiles":[{"containers":["flac"],"audioCodecs":["flac"],"protocols":["http"]}],
+					"transcodingProfiles":[{"container":"ogg","audioCodec":"opus","protocol":"http"},
+						{"container":"mp3","audioCodec":"mp3","protocol":"http"}]}`
+				r := withForcedFormat(newJSONPostRequest("mediaId=song-1&mediaType=song", body), "opus", 0)
+
+				_, err := router.GetTranscodeDecision(w, r)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(mockTD.capturedClient.TranscodingProfiles).To(HaveLen(1))
+				Expect(mockTD.capturedClient.TranscodingProfiles[0].AudioCodec).To(Equal("opus"))
+				Expect(mockTD.capturedClient.DirectPlayProfiles).To(ConsistOf(stream.DirectPlayProfile{
+					Containers:  []string{"ogg"},
+					AudioCodecs: []string{"opus"},
+					Protocols:   []string{"http"},
+				}))
+			})
+
+			It("falls back to negotiation when the forced format is unsupported", func() {
+				// Forced format is opus, but the client only declares mp3 and flac.
+				// Should fall back to negotiating among the client's own profiles.
+				body := `{"directPlayProfiles":[{"containers":["flac"],"audioCodecs":["flac"],"protocols":["http"]}],
+					"transcodingProfiles":[
+						{"container":"flac","audioCodec":"flac","protocol":"http"},
+						{"container":"mp3","audioCodec":"mp3","protocol":"http"}]}`
+				r := withForcedFormat(newJSONPostRequest("mediaId=song-1&mediaType=song", body), "opus", 0)
+
+				_, err := router.GetTranscodeDecision(w, r)
+
+				Expect(err).ToNot(HaveOccurred())
+				// Profiles left intact for normal negotiation (forced format not applied).
+				Expect(mockTD.capturedClient.TranscodingProfiles).To(HaveLen(2))
+				Expect(mockTD.capturedClient.DirectPlayProfiles).ToNot(BeEmpty())
+			})
+
+			It("applies the maxBitRate cap on top of the forced format", func() {
+				// Client supports opus + mp3; forced format opus must be selected,
+				// and the maxBitRate cap applied on top.
+				body := `{"transcodingProfiles":[
+					{"container":"ogg","audioCodec":"opus","protocol":"http"},
+					{"container":"mp3","audioCodec":"mp3","protocol":"http"}]}`
+				r := withForcedFormat(newJSONPostRequest("mediaId=song-1&mediaType=song", body), "opus", 128)
+
+				_, err := router.GetTranscodeDecision(w, r)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(mockTD.capturedClient.TranscodingProfiles).To(HaveLen(1))
+				Expect(mockTD.capturedClient.TranscodingProfiles[0].AudioCodec).To(Equal("opus"))
+				Expect(mockTD.capturedClient.MaxAudioBitrate).To(Equal(128))
+				Expect(mockTD.capturedClient.MaxTranscodingAudioBitrate).To(Equal(128))
+			})
+
+			withForcedBitRate := func(r *http.Request, format string, defaultBitRate, playerMaxBitRate int) *http.Request {
+				ctx := request.WithTranscoding(r.Context(), model.Transcoding{TargetFormat: format, DefaultBitRate: defaultBitRate})
+				ctx = request.WithPlayer(ctx, model.Player{Client: "NavidromeUI", MaxBitRate: playerMaxBitRate})
+				return r.WithContext(ctx)
+			}
+
+			It("applies the transcoding default bitrate when the player sets no maxBitRate", func() {
+				body := `{"transcodingProfiles":[{"container":"mp3","audioCodec":"mp3","protocol":"http"}]}`
+				r := withForcedBitRate(newJSONPostRequest("mediaId=song-1&mediaType=song", body), "mp3", 192, 0)
+
+				_, err := router.GetTranscodeDecision(w, r)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(mockTD.capturedClient.MaxAudioBitrate).To(Equal(192))
+				Expect(mockTD.capturedClient.MaxTranscodingAudioBitrate).To(Equal(192))
+			})
+
+			It("prefers the player maxBitRate over the transcoding default bitrate", func() {
+				body := `{"transcodingProfiles":[{"container":"mp3","audioCodec":"mp3","protocol":"http"}]}`
+				r := withForcedBitRate(newJSONPostRequest("mediaId=song-1&mediaType=song", body), "mp3", 192, 320)
+
+				_, err := router.GetTranscodeDecision(w, r)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(mockTD.capturedClient.MaxAudioBitrate).To(Equal(320))
+			})
+
+			It("ignores the transcoding default bitrate when the forced format is unsupported", func() {
+				body := `{"transcodingProfiles":[{"container":"mp3","audioCodec":"mp3","protocol":"http"}]}`
+				r := withForcedBitRate(newJSONPostRequest("mediaId=song-1&mediaType=song", body), "opus", 192, 0)
+
+				_, err := router.GetTranscodeDecision(w, r)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(mockTD.capturedClient.MaxAudioBitrate).To(BeZero())
+			})
 		})
 	})
 
@@ -378,6 +602,7 @@ func newJSONPostRequest(queryParams string, jsonBody string) *http.Request {
 // mockTranscodeDecision is a test double for stream.TranscodeDecider
 type mockTranscodeDecision struct {
 	decision       *stream.TranscodeDecision
+	decisionErr    error
 	token          string
 	tokenErr       error
 	resolvedReq    stream.Request
@@ -387,6 +612,9 @@ type mockTranscodeDecision struct {
 
 func (m *mockTranscodeDecision) MakeDecision(_ context.Context, _ *model.MediaFile, ci *stream.ClientInfo, _ stream.TranscodeOptions) (*stream.TranscodeDecision, error) {
 	m.capturedClient = ci
+	if m.decisionErr != nil {
+		return nil, m.decisionErr
+	}
 	if m.decision != nil {
 		return m.decision, nil
 	}
@@ -394,6 +622,10 @@ func (m *mockTranscodeDecision) MakeDecision(_ context.Context, _ *model.MediaFi
 }
 
 func (m *mockTranscodeDecision) ResolveRequest(_ context.Context, _ *model.MediaFile, _ string, _ int, _ int) stream.Request {
+	return stream.Request{Format: "raw"}
+}
+
+func (m *mockTranscodeDecision) ResolveClientRequest(context.Context, *model.MediaFile, *stream.ClientInfo, int) stream.Request {
 	return stream.Request{Format: "raw"}
 }
 

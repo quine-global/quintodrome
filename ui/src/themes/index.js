@@ -8,18 +8,26 @@ import MonokaiTheme from './monokai'
 import ElectricPurpleTheme from './electricPurple'
 import NordTheme from './nord'
 import GruvboxDarkTheme from './gruvboxDark'
+import CatppuccinFrappeTheme from './catppuccinFrappe'
 import CatppuccinMacchiatoTheme from './catppuccinMacchiato'
+import CatppuccinMochaTheme from './catppuccinMocha'
 import CatppuccinLatteTheme from './catppuccinLatte'
 import DraculaTheme from './dracula'
 import NuclearTheme from './nuclear'
 import NutballTheme from './nutball'
+import RosePineTheme from './rosePine'
+import RosePineDawnTheme from './rosePineDawn'
+import RosePineMoonTheme from './rosePineMoon'
 import AmusicTheme from './amusic'
+import CaveTheme from './cave'
 import SquiddiesGlassTheme from './SquiddiesGlass'
 import NautilineTheme from './nautiline'
 import MoonbaseAlphaTheme from './moonbaseAlpha'
 import MoonbaseBravoTheme from './moonbaseBravo'
 import TokyoNightLightTheme from './tokyoNightLight'
 import TokyoNightTheme from './tokyoNight'
+import SolarizedDarkTheme from './solarizedDark'
+import SolarizedLightTheme from './solarizedLight'
 
 export default {
   // Classic default themes
@@ -28,8 +36,11 @@ export default {
 
   // New themes should be added here, in alphabetic order
   AmusicTheme,
-  CatppuccinMacchiatoTheme,
+  CatppuccinFrappeTheme,
   CatppuccinLatteTheme,
+  CatppuccinMacchiatoTheme,
+  CatppuccinMochaTheme,
+  CaveTheme,
   DraculaTheme,
   ElectricPurpleTheme,
   ExtraDarkTheme,
@@ -43,6 +54,11 @@ export default {
   NordTheme,
   NuclearTheme,
   NutballTheme,
+  RosePineDawnTheme,
+  RosePineMoonTheme,
+  RosePineTheme,
+  SolarizedDarkTheme,
+  SolarizedLightTheme,
   SpotifyTheme,
   SquiddiesGlassTheme,
   TokyoNightLightTheme,

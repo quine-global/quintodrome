@@ -1,6 +1,7 @@
 package log
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -9,9 +10,10 @@ import (
 	"net/http"
 	"os"
 	"runtime"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -25,14 +27,16 @@ var redacted = &Hook{
 	AcceptedLevels: logrus.AllLevels,
 	RedactionList: []string{
 		// Keys from the config
-		"(ApiKey:\")[\\w]*",
-		"(Secret:\")[\\w]*",
+		"(ApiKey:[\\s]*\")[\\w]*",
+		"(Secret:[\\s]*\")[\\w]*",
 		"(PasswordEncryptionKey:[\\s]*\")[^\"]*",
 		"(UserHeader:[\\s]*\")[^\"]*",
 		"(TrustedSources:[\\s]*\")[^\"]*",
 		"(MetricsPath:[\\s]*\")[^\"]*",
 		"(DevAutoCreateAdminPassword:[\\s]*\")[^\"]*",
 		"(DevAutoLoginUsername:[\\s]*\")[^\"]*",
+		// Prometheus.Password. Any character is allowed, so skip escaped quotes in the value
+		`(Password:[\s]*")(?:[^"\\]|\\.)*`,
 
 		// UI appConfig
 		"(subsonicToken:)[\\w]+(\\s)",
@@ -45,8 +49,15 @@ var redacted = &Hook{
 		"([^\\w]p=)[^&]+",
 		"([^\\w]jwt=)[^&]+",
 
-		// External services query params
-		"([^\\w]api_key=)[\\w]+",
+		// External services query params. Values can be JWTs (dots, dashes), so match everything up
+		// to the next query separator or whitespace, not just word chars. A [\w]+ class would stop
+		// at a JWT's first '.' and leak its payload and signature. Case-insensitive with an
+		// optional underscore: the API accepts api_key, apikey and ApiKey alike.
+		"(?i)([^\\w]api_?key=)[^&\\s]+",
+
+		// Sensitive request headers, logged as a JSON blob at trace level and never matched by the
+		// query-param patterns above. Blank the whole value array; values may hold escaped quotes.
+		`(?i)("(?:Authorization|X-Emby-Token|X-MediaBrowser-Token|X-Nd-Authorization)":\[")[^\]]*("\])`,
 	},
 }
 
@@ -69,18 +80,19 @@ type levelPath struct {
 }
 
 var (
-	currentLevel  Level
-	loggerMu      sync.RWMutex
-	defaultLogger = logrus.New()
-	logSourceLine = false
-	rootPath      string
-	logLevels     []levelPath
+	currentLevel         atomic.Uint32
+	hasLogLevelOverrides atomic.Bool
+	loggerMu             sync.RWMutex
+	defaultLogger        = logrus.New()
+	logSourceLine        = false
+	rootPath             string
+	logLevels            []levelPath
 )
 
 // SetLevel sets the global log level used by the simple logger.
 func SetLevel(l Level) {
 	loggerMu.Lock()
-	currentLevel = l
+	currentLevel.Store(uint32(l))
 	defaultLogger.Level = logrus.TraceLevel
 	loggerMu.Unlock()
 	logrus.SetLevel(logrus.Level(l))
@@ -119,9 +131,10 @@ func SetLogLevels(levels map[string]string) {
 	for k, v := range levels {
 		logLevels = append(logLevels, levelPath{path: k, level: ParseLogLevel(v)})
 	}
-	sort.Slice(logLevels, func(i, j int) bool {
-		return logLevels[i].path > logLevels[j].path
+	slices.SortFunc(logLevels, func(a, b levelPath) int {
+		return cmp.Compare(b.path, a.path)
 	})
+	hasLogLevelOverrides.Store(len(logLevels) != 0)
 }
 
 func SetLogSourceLine(enabled bool) {
@@ -175,16 +188,18 @@ func NewContext(ctx context.Context, keyValuePairs ...any) context.Context {
 	return ctx
 }
 
-func SetDefaultLogger(l *logrus.Logger) {
+// SetDefaultLogger swaps the process-wide logger and returns the previous one,
+// so tests can restore the original (with its hooks and formatter) on cleanup.
+func SetDefaultLogger(l *logrus.Logger) *logrus.Logger {
 	loggerMu.Lock()
 	defer loggerMu.Unlock()
+	prev := defaultLogger
 	defaultLogger = l
+	return prev
 }
 
 func CurrentLevel() Level {
-	loggerMu.RLock()
-	defer loggerMu.RUnlock()
-	return currentLevel
+	return Level(currentLevel.Load())
 }
 
 // IsGreaterOrEqualTo returns true if the caller's current log level is equal or greater than the provided level.
@@ -193,34 +208,39 @@ func IsGreaterOrEqualTo(level Level) bool {
 }
 
 func Fatal(args ...any) {
-	Log(LevelFatal, args...)
+	log(LevelFatal, args...)
 	os.Exit(1)
 }
 
 func Error(args ...any) {
-	Log(LevelError, args...)
+	log(LevelError, args...)
 }
 
 func Warn(args ...any) {
-	Log(LevelWarn, args...)
+	log(LevelWarn, args...)
 }
 
 func Info(args ...any) {
-	Log(LevelInfo, args...)
+	log(LevelInfo, args...)
 }
 
 func Debug(args ...any) {
-	Log(LevelDebug, args...)
+	log(LevelDebug, args...)
 }
 
 func Trace(args ...any) {
-	Log(LevelTrace, args...)
+	log(LevelTrace, args...)
 }
 
 func Log(level Level, args ...any) {
+	log(level, args...)
+}
+
+func log(level Level, args ...any) {
 	if !shouldLog(level, 3) {
 		return
 	}
+
 	logger, msg := parseArgs(args)
 	logger.Log(logrus.Level(level), msg)
 }
@@ -232,17 +252,17 @@ func Writer() io.Writer {
 }
 
 func shouldLog(requiredLevel Level, skip int) bool {
-	loggerMu.RLock()
-	level := currentLevel
-	levels := logLevels
-	loggerMu.RUnlock()
-
+	level := Level(currentLevel.Load())
 	if level >= requiredLevel {
 		return true
 	}
-	if len(levels) == 0 {
+	if !hasLogLevelOverrides.Load() {
 		return false
 	}
+
+	loggerMu.RLock()
+	levels := logLevels
+	loggerMu.RUnlock()
 
 	_, file, _, ok := runtime.Caller(skip)
 	if !ok {

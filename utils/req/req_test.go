@@ -60,9 +60,7 @@ var _ = Describe("Request Helpers", func() {
 		})
 
 		It("returns empty array if param does not exist", func() {
-			v, err := r.Strings("xx")
-			Expect(err).To(MatchError(req.ErrMissingParam))
-			Expect(v).To(BeEmpty())
+			Expect(r.Strings("xx")).To(BeEmpty())
 		})
 	})
 
@@ -291,4 +289,22 @@ var _ = Describe("Request Helpers", func() {
 			Expect(ptr).To(BeNil())
 		})
 	})
+})
+
+var _ = Describe("IfNoneMatch", func() {
+	DescribeTable("matches the ETag",
+		func(header string, expected bool) {
+			r := httptest.NewRequest("GET", "/", nil)
+			if header != "" {
+				r.Header.Set("If-None-Match", header)
+			}
+			Expect(req.IfNoneMatch(r, "abc123")).To(Equal(expected))
+		},
+		Entry("absent header", "", false),
+		Entry("exact quoted tag", `"abc123"`, true),
+		Entry("weak tag", `W/"abc123"`, true),
+		Entry("tag in a list", `"other", W/"abc123"`, true),
+		Entry("wildcard", "*", true),
+		Entry("different tag", `"stale"`, false),
+	)
 })

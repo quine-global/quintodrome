@@ -29,7 +29,7 @@ func (m *mockStreamer) NewStream(_ context.Context, _ *model.MediaFile, r stream
 
 var _ = Describe("decodeStreamInfo", func() {
 	BeforeEach(func() {
-		auth.TokenAuth = jwtauth.New("HS256", []byte("test-secret"), nil)
+		auth.PublicTokenAuth = jwtauth.New("HS256", []byte("test-secret"), nil)
 	})
 
 	It("decodes a valid token with all fields", func() {
@@ -71,20 +71,17 @@ var _ = Describe("decodeStreamInfo", func() {
 		Expect(err).To(HaveOccurred())
 	})
 
-	It("handles tokens without shareID (backward compat)", func() {
+	It("rejects a token without a shareID claim", func() {
 		claims := auth.Claims{ID: "mf-123", Format: "opus"}
 		token, _ := auth.CreatePublicToken(claims)
-		info, err := decodeStreamInfo(token)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(info.id).To(Equal("mf-123"))
-		Expect(info.format).To(Equal("opus"))
-		Expect(info.shareID).To(BeEmpty())
+		_, err := decodeStreamInfo(token)
+		Expect(err).To(HaveOccurred())
 	})
 })
 
 var _ = Describe("encodeMediafileShare", func() {
 	BeforeEach(func() {
-		auth.TokenAuth = jwtauth.New("HS256", []byte("test-secret"), nil)
+		auth.PublicTokenAuth = jwtauth.New("HS256", []byte("test-secret"), nil)
 	})
 
 	It("includes the share ID in the token", func() {
@@ -110,18 +107,20 @@ var _ = Describe("encodeMediafileShare", func() {
 })
 
 var _ = Describe("handleStream", func() {
+	var ctx context.Context
 	var ds *tests.MockDataStore
 	var shareRepo *tests.MockShareRepo
 	var streamer *mockStreamer
 	var pub *Router
 
 	BeforeEach(func() {
-		auth.TokenAuth = jwtauth.New("HS256", []byte("test-secret"), nil)
-		ds = &tests.MockDataStore{}
+		ctx = GinkgoT().Context()
+		auth.PublicTokenAuth = jwtauth.New("HS256", []byte("test-secret"), nil)
+		ds = &tests.MockDataStore{MockedTranscoding: &tests.MockTranscodingRepo{}}
 		shareRepo = &tests.MockShareRepo{}
 		ds.MockedShare = shareRepo
 		streamer = &mockStreamer{}
-		pub = &Router{ds: ds, streamer: streamer}
+		pub = &Router{ds: ds, streamer: streamer, decider: stream.NewTranscodeDecider(ds, tests.NewMockFFmpeg(""))}
 	})
 
 	makeRequest := func(token string) *httptest.ResponseRecorder {
@@ -131,19 +130,85 @@ var _ = Describe("handleStream", func() {
 		return w
 	}
 
-	It("passes all validation and reaches the streamer for a valid token", func() {
+	shareOwnedBy := func(owner model.User, mf model.MediaFile) {
 		shareRepo.ID = "share123"
+		shareRepo.Entity = &model.Share{ID: "share123", UserID: owner.ID, Tracks: model.MediaFiles{mf}}
+		userRepo := tests.CreateMockUserRepo()
+		Expect(userRepo.Put(ctx, &owner)).To(Succeed())
+		ds.MockedUser = userRepo
 		mfRepo := tests.CreateMockMediaFileRepo()
-		mfRepo.SetData(model.MediaFiles{{ID: "mf-123", Title: "Test Song"}})
+		mfRepo.SetData(model.MediaFiles{mf})
 		ds.MockedMediaFile = mfRepo
+	}
+
+	It("passes all validation and reaches the streamer for a valid token", func() {
+		shareOwnedBy(
+			model.User{ID: "owner1", UserName: "owner1", IsAdmin: true},
+			model.MediaFile{ID: "mf-123", Title: "Test Song"},
+		)
 
 		claims := auth.Claims{ID: "mf-123", Format: "mp3", BitRate: 192, ShareID: "share123"}
 		token, _ := auth.CreateExpiringPublicToken(time.Now().Add(time.Hour), claims)
 		makeRequest(token)
 
 		Expect(streamer.called).To(BeTrue())
-		Expect(streamer.req.Format).To(Equal("mp3"))
-		Expect(streamer.req.BitRate).To(Equal(192))
+	})
+
+	It("resolves the full stream request like the Subsonic endpoint, so transcodes share the cache", func() {
+		mf := model.MediaFile{ID: "mf-123", Suffix: "flac", BitRate: 1500, SampleRate: 44100, BitDepth: new(24), Channels: 2}
+		shareOwnedBy(model.User{ID: "owner1", UserName: "owner1", IsAdmin: true}, mf)
+
+		claims := auth.Claims{ID: "mf-123", Format: "opus", BitRate: 128, ShareID: "share123"}
+		token, _ := auth.CreateExpiringPublicToken(time.Now().Add(time.Hour), claims)
+		makeRequest(token)
+
+		Expect(streamer.req).To(Equal(stream.Request{Format: "opus", BitRate: 128, SampleRate: 48000, Channels: 2}))
+	})
+
+	It("returns 404 when the track is outside the share owner's libraries", func() {
+		shareOwnedBy(
+			model.User{ID: "owner1", UserName: "owner1", Libraries: model.Libraries{{ID: 1}}},
+			model.MediaFile{ID: "mf-restricted", Title: "Other Lib Track", LibraryID: 2},
+		)
+
+		claims := auth.Claims{ID: "mf-restricted", ShareID: "share123"}
+		token, _ := auth.CreateExpiringPublicToken(time.Now().Add(time.Hour), claims)
+		w := makeRequest(token)
+
+		Expect(w.Code).To(Equal(http.StatusNotFound))
+		Expect(streamer.called).To(BeFalse())
+	})
+
+	It("returns 404 when the track is not a member of the share", func() {
+		owner := model.User{ID: "owner1", UserName: "owner1", IsAdmin: true}
+		userRepo := tests.CreateMockUserRepo()
+		Expect(userRepo.Put(ctx, &owner)).To(Succeed())
+		ds.MockedUser = userRepo
+		mfRepo := tests.CreateMockMediaFileRepo()
+		mfRepo.SetData(model.MediaFiles{{ID: "mf-shared"}, {ID: "mf-other"}})
+		ds.MockedMediaFile = mfRepo
+		shareRepo.ID = "share123"
+		shareRepo.Entity = &model.Share{ID: "share123", UserID: owner.ID, Tracks: model.MediaFiles{{ID: "mf-shared"}}}
+
+		claims := auth.Claims{ID: "mf-other", ShareID: "share123"}
+		token, _ := auth.CreateExpiringPublicToken(time.Now().Add(time.Hour), claims)
+		w := makeRequest(token)
+
+		Expect(w.Code).To(Equal(http.StatusNotFound))
+		Expect(streamer.called).To(BeFalse())
+	})
+
+	It("streams a track inside the share owner's libraries", func() {
+		shareOwnedBy(
+			model.User{ID: "owner1", UserName: "owner1", Libraries: model.Libraries{{ID: 1}}},
+			model.MediaFile{ID: "mf-ok", Title: "OK", LibraryID: 1},
+		)
+
+		claims := auth.Claims{ID: "mf-ok", Format: "mp3", ShareID: "share123"}
+		token, _ := auth.CreateExpiringPublicToken(time.Now().Add(time.Hour), claims)
+		makeRequest(token)
+
+		Expect(streamer.called).To(BeTrue())
 	})
 
 	It("returns 400 for an expired token", func() {
@@ -179,12 +244,12 @@ var _ = Describe("handleStream", func() {
 		Expect(w.Code).To(Equal(http.StatusInternalServerError))
 	})
 
-	It("skips share check for tokens without shareID (backward compat)", func() {
+	It("returns 400 for tokens without a shareID", func() {
 		claims := auth.Claims{ID: "mf-123"}
 		token, _ := auth.CreatePublicToken(claims)
 		w := makeRequest(token)
-		// Should get past share check, then fail on media file lookup (no mock data)
-		Expect(w.Code).To(Equal(http.StatusNotFound))
+		Expect(w.Code).To(Equal(http.StatusBadRequest))
+		Expect(streamer.called).To(BeFalse())
 	})
 
 	It("returns 400 for an invalid token", func() {

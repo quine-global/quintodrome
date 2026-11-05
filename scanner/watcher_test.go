@@ -9,6 +9,7 @@ import (
 
 	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/conf/configtest"
+	"github.com/navidrome/navidrome/core/storage/storagetest"
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/tests"
 	. "github.com/onsi/ginkgo/v2"
@@ -25,15 +26,20 @@ var _ = Describe("Watcher", func() {
 
 	BeforeEach(func() {
 		DeferCleanup(configtest.SetupConfig())
-		conf.Server.Scanner.WatcherWait = 50 * time.Millisecond // Short wait for tests
+		// Must dwarf the 20ms Consistently windows below, or a loaded runner's delayed timer reset flakes the debouncing spec.
+		conf.Server.Scanner.WatcherWait = 200 * time.Millisecond
 
 		ctx, cancel = context.WithCancel(GinkgoT().Context())
 		DeferCleanup(cancel)
 
+		// Use a fake storage scheme: watchLibrary goroutines spawned by Run/Watch are not
+		// joined on spec teardown, and the real file:// storage reads conf.Server on
+		// construction, racing with the configtest cleanup that restores the config.
+		storagetest.Register("fake-watcher", &storagetest.FakeFS{})
 		lib = &model.Library{
 			ID:   1,
 			Name: "Test Library",
-			Path: "/test/library",
+			Path: "fake-watcher:///test/library",
 		}
 
 		// Set up mocks
@@ -86,7 +92,7 @@ var _ = Describe("Watcher", func() {
 					return nil
 				}
 				return calls[0].Targets
-			}, 500*time.Millisecond, 10*time.Millisecond).Should(HaveLen(2))
+			}, 2*time.Second, 10*time.Millisecond).Should(HaveLen(2))
 
 			// Verify targets
 			calls := mockScanner.GetScanFoldersCalls()
@@ -106,7 +112,7 @@ var _ = Describe("Watcher", func() {
 			// Wait for watcher to process and trigger scan
 			Eventually(func() int {
 				return mockScanner.GetScanFoldersCallCount()
-			}, 500*time.Millisecond, 10*time.Millisecond).Should(Equal(1))
+			}, 2*time.Second, 10*time.Millisecond).Should(Equal(1))
 
 			// Verify the target
 			calls := mockScanner.GetScanFoldersCalls()
@@ -124,7 +130,7 @@ var _ = Describe("Watcher", func() {
 			// Wait for watcher to process and trigger scan
 			Eventually(func() int {
 				return mockScanner.GetScanFoldersCallCount()
-			}, 500*time.Millisecond, 10*time.Millisecond).Should(Equal(1))
+			}, 2*time.Second, 10*time.Millisecond).Should(Equal(1))
 
 			// Verify only one target despite multiple file/folder changes
 			calls := mockScanner.GetScanFoldersCalls()
@@ -165,7 +171,7 @@ var _ = Describe("Watcher", func() {
 			// Now wait for the debounce timer to expire and trigger scan
 			Eventually(func() int {
 				return mockScanner.GetScanFoldersCallCount()
-			}, 500*time.Millisecond, 10*time.Millisecond).Should(Equal(1))
+			}, 2*time.Second, 10*time.Millisecond).Should(Equal(1))
 		})
 
 		It("triggers scan after quiet period", func() {
@@ -178,7 +184,7 @@ var _ = Describe("Watcher", func() {
 			// Wait for quiet period
 			Eventually(func() int {
 				return mockScanner.GetScanFoldersCallCount()
-			}, 500*time.Millisecond, 10*time.Millisecond).Should(Equal(1))
+			}, 2*time.Second, 10*time.Millisecond).Should(Equal(1))
 		})
 	})
 
@@ -200,7 +206,7 @@ var _ = Describe("Watcher", func() {
 			// Wait for scan
 			Eventually(func() int {
 				return mockScanner.GetScanFoldersCallCount()
-			}, 500*time.Millisecond, 10*time.Millisecond).Should(Equal(1))
+			}, 2*time.Second, 10*time.Millisecond).Should(Equal(1))
 
 			// Should scan the library root
 			calls := mockScanner.GetScanFoldersCalls()
@@ -217,7 +223,7 @@ var _ = Describe("Watcher", func() {
 			// Wait for scan
 			Eventually(func() int {
 				return mockScanner.GetScanFoldersCallCount()
-			}, 500*time.Millisecond, 10*time.Millisecond).Should(Equal(1))
+			}, 2*time.Second, 10*time.Millisecond).Should(Equal(1))
 
 			// Should have only one target
 			calls := mockScanner.GetScanFoldersCalls()
@@ -234,7 +240,7 @@ var _ = Describe("Watcher", func() {
 			lib2 = &model.Library{
 				ID:   2,
 				Name: "Test Library 2",
-				Path: "/test/library2",
+				Path: "fake-watcher:///test/library2",
 			}
 
 			mockLibRepo := mockDS.MockedLibrary.(*tests.MockLibraryRepo)
@@ -261,7 +267,7 @@ var _ = Describe("Watcher", func() {
 					return nil
 				}
 				return calls[0].Targets
-			}, 500*time.Millisecond, 10*time.Millisecond).Should(HaveLen(2))
+			}, 2*time.Second, 10*time.Millisecond).Should(HaveLen(2))
 
 			// Verify library IDs are different
 			calls := mockScanner.GetScanFoldersCalls()
@@ -428,6 +434,50 @@ var _ = Describe("Watcher", func() {
 				Expect(w.watcherNotify).To(BeEmpty(), "Expected no scan notification for file in ignored folder")
 			})
 		})
+
+	})
+})
+
+var _ = Describe("isIgnoredPath", func() {
+	BeforeEach(func() {
+		DeferCleanup(configtest.SetupConfig())
+	})
+
+	Context("with IgnoreDotFolders enabled (default)", func() {
+		BeforeEach(func() {
+			conf.Server.Scanner.IgnoreDotFolders = true
+		})
+
+		DescribeTable("returns expected result",
+			func(p string, expected bool) {
+				Expect(isIgnoredPath(context.Background(), nil, filepath.FromSlash(p))).To(Equal(expected))
+			},
+			Entry("media file in normal folder", "rock/Album/track.mp3", false),
+			Entry("dot-prefixed media file", "rock/Album/.hidden.mp3", true),
+			Entry("media file inside a dot-folder", "rock/.Hidden Album/track.mp3", true),
+			Entry("media file inside a blocklisted folder", "rock/.streams/stream.mp3", true),
+			Entry("media file inside .git", "rock/.git/track.mp3", true),
+			Entry("dot-folder itself", "rock/.Hidden Album", true),
+			Entry("normal folder itself", "rock/Album", false),
+			Entry(".DS_Store file", "rock/Album/.DS_Store", true),
+		)
+	})
+
+	Context("with IgnoreDotFolders disabled", func() {
+		BeforeEach(func() {
+			conf.Server.Scanner.IgnoreDotFolders = false
+		})
+
+		DescribeTable("returns expected result",
+			func(p string, expected bool) {
+				Expect(isIgnoredPath(context.Background(), nil, filepath.FromSlash(p))).To(Equal(expected))
+			},
+			Entry("media file inside a dot-folder is allowed", "rock/.Hidden Album/track.mp3", false),
+			Entry("dot-prefixed media file is still ignored", "rock/Album/.hidden.mp3", true),
+			Entry("dot-folder itself is allowed", "rock/.Hidden Album", false),
+			Entry("blocklisted folder still ignored", "rock/.streams/stream.mp3", true),
+			Entry(".git still ignored", "rock/.git/config", true),
+		)
 	})
 })
 

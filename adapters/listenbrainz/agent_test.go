@@ -30,7 +30,7 @@ var _ = Describe("listenBrainzAgent", func() {
 	BeforeEach(func() {
 		ds = &tests.MockDataStore{}
 		ctx = context.Background()
-		_ = ds.UserProps(ctx).Put("user-1", sessionKeyProperty, "SK-1")
+		_ = ds.UserProps().Put(ctx, "user-1", sessionKeyProperty, "SK-1")
 		httpClient = &tests.FakeHttpClient{}
 		agent = listenBrainzConstructor(ds)
 		agent.client = newClient("http://localhost:8080", httpClient)
@@ -164,6 +164,19 @@ var _ = Describe("listenBrainzAgent", func() {
 			err := agent.Scrobble(ctx, "user-1", sc)
 			Expect(err).To(MatchError(scrobbler.ErrUnrecoverable))
 		})
+
+		It("keeps a 429 scrobble for retry and carries the delay", func() {
+			httpClient.Res = http.Response{
+				StatusCode: 429,
+				Header:     http.Header{"X-Ratelimit-Reset-In": []string{"7"}},
+				Body:       io.NopCloser(bytes.NewBufferString(`{"code":429,"error":"rate limited"}`)),
+			}
+			err := agent.Scrobble(ctx, "user-1", scrobbler.Scrobble{MediaFile: *track, TimeStamp: time.Now()})
+			Expect(errors.Is(err, scrobbler.ErrRetryLater)).To(BeTrue())
+			retry, ok := errors.AsType[*agents.RetryLaterError](err)
+			Expect(ok).To(BeTrue())
+			Expect(retry.RetryIn).To(Equal(7 * time.Second))
+		})
 	})
 
 	Describe("GetArtistUrl", func() {
@@ -249,24 +262,22 @@ var _ = Describe("listenBrainzAgent", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(data).To(Equal([]agents.Song{
 				{
-					ID:         "",
-					Name:       "world.execute(me);",
-					MBID:       "9980309d-3480-4e7e-89ce-fce971a452be",
-					Artist:     "Mili",
-					ArtistMBID: "d2a92ee2-27ce-4e71-bfc5-12e34fe8ef56",
-					Album:      "Miracle Milk",
-					AlbumMBID:  "38a8f6e1-0e34-4418-a89d-78240a367408",
-					Duration:   211912,
+					ID:        "",
+					Name:      "world.execute(me);",
+					MBID:      "9980309d-3480-4e7e-89ce-fce971a452be",
+					Artists:   []agents.Artist{{Name: "Mili", MBID: "d2a92ee2-27ce-4e71-bfc5-12e34fe8ef56"}},
+					Album:     "Miracle Milk",
+					AlbumMBID: "38a8f6e1-0e34-4418-a89d-78240a367408",
+					Duration:  211912,
 				},
 				{
-					ID:         "",
-					Name:       "String Theocracy",
-					MBID:       "afa2c83d-b17f-4029-b9da-790ea9250cf9",
-					Artist:     "Mili",
-					ArtistMBID: "d2a92ee2-27ce-4e71-bfc5-12e34fe8ef56",
-					Album:      "String Theocracy",
-					AlbumMBID:  "d79a38e3-7016-4f39-a31a-f495ce914b8e",
-					Duration:   174000,
+					ID:        "",
+					Name:      "String Theocracy",
+					MBID:      "afa2c83d-b17f-4029-b9da-790ea9250cf9",
+					Artists:   []agents.Artist{{Name: "Mili", MBID: "d2a92ee2-27ce-4e71-bfc5-12e34fe8ef56"}},
+					Album:     "String Theocracy",
+					AlbumMBID: "d79a38e3-7016-4f39-a31a-f495ce914b8e",
+					Duration:  174000,
 				},
 			}))
 		})
@@ -278,16 +289,44 @@ var _ = Describe("listenBrainzAgent", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(data).To(Equal([]agents.Song{
 				{
-					ID:         "",
-					Name:       "world.execute(me);",
-					MBID:       "9980309d-3480-4e7e-89ce-fce971a452be",
-					Artist:     "Mili",
-					ArtistMBID: "d2a92ee2-27ce-4e71-bfc5-12e34fe8ef56",
-					Album:      "Miracle Milk",
-					AlbumMBID:  "38a8f6e1-0e34-4418-a89d-78240a367408",
-					Duration:   211912,
+					ID:        "",
+					Name:      "world.execute(me);",
+					MBID:      "9980309d-3480-4e7e-89ce-fce971a452be",
+					Artists:   []agents.Artist{{Name: "Mili", MBID: "d2a92ee2-27ce-4e71-bfc5-12e34fe8ef56"}},
+					Album:     "Miracle Milk",
+					AlbumMBID: "38a8f6e1-0e34-4418-a89d-78240a367408",
+					Duration:  211912,
 				},
 			}))
+		})
+
+		It("maps a multi-artist top song to one named artist plus MBID-only collaborators", func() {
+			body := `[{
+				"recording_name": "Collab",
+				"recording_mbid": "rec-1",
+				"artist_name": "Drake feat. Future",
+				"artist_mbids": ["mbid-drake", "mbid-future"],
+				"release_name": "Album",
+				"release_mbid": "rel-1",
+				"length": 200000
+			}]`
+			httpClient.Res = http.Response{Body: io.NopCloser(bytes.NewBufferString(body)), StatusCode: 200}
+			data, err := agent.GetArtistTopSongs(ctx, "", "", "mbid-drake", 1)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(data).To(HaveLen(1))
+			Expect(data[0].Artists).To(Equal([]agents.Artist{
+				{Name: "Drake feat. Future", MBID: "mbid-drake"},
+				{MBID: "mbid-future"},
+			}))
+		})
+
+		It("leaves Artists nil when the top song carries no name or MBIDs", func() {
+			body := `[{"recording_name": "Anon", "recording_mbid": "rec-1", "artist_name": "", "artist_mbids": []}]`
+			httpClient.Res = http.Response{Body: io.NopCloser(bytes.NewBufferString(body)), StatusCode: 200}
+			data, err := agent.GetArtistTopSongs(ctx, "", "", "x", 1)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(data).To(HaveLen(1))
+			Expect(data[0].Artists).To(BeNil())
 		})
 	})
 
@@ -393,26 +432,24 @@ var _ = Describe("listenBrainzAgent", func() {
 			Expect(httpClient.SavedRequest.URL.String()).To(Equal(baseUrl + mbid))
 			Expect(resp).To(Equal([]agents.Song{
 				{
-					ID:         "",
-					Name:       "Take On Me",
-					MBID:       "12f65dca-de8f-43fe-a65d-f12a02aaadf3",
-					ISRC:       "",
-					Artist:     "a‐ha",
-					ArtistMBID: "",
-					Album:      "Hunting High and Low",
-					AlbumMBID:  "4ec07fe8-e7c6-3106-a0aa-fdf92f13f7fc",
-					Duration:   0,
+					ID:        "",
+					Name:      "Take On Me",
+					MBID:      "12f65dca-de8f-43fe-a65d-f12a02aaadf3",
+					ISRC:      "",
+					Artists:   []agents.Artist{{Name: "a‐ha"}},
+					Album:     "Hunting High and Low",
+					AlbumMBID: "4ec07fe8-e7c6-3106-a0aa-fdf92f13f7fc",
+					Duration:  0,
 				},
 				{
-					ID:         "",
-					Name:       "Wake Me Up Before You Go‐Go",
-					MBID:       "80033c72-aa19-4ba8-9227-afb075fec46e",
-					ISRC:       "",
-					Artist:     "Wham!",
-					ArtistMBID: "",
-					Album:      "Make It Big",
-					AlbumMBID:  "c143d542-48dc-446b-b523-1762da721638",
-					Duration:   0,
+					ID:        "",
+					Name:      "Wake Me Up Before You Go‐Go",
+					MBID:      "80033c72-aa19-4ba8-9227-afb075fec46e",
+					ISRC:      "",
+					Artists:   []agents.Artist{{Name: "Wham!"}},
+					Album:     "Make It Big",
+					AlbumMBID: "c143d542-48dc-446b-b523-1762da721638",
+					Duration:  0,
 				},
 			}))
 		})
@@ -427,15 +464,14 @@ var _ = Describe("listenBrainzAgent", func() {
 			Expect(httpClient.SavedRequest.URL.String()).To(Equal(baseUrl + mbid))
 			Expect(resp).To(Equal([]agents.Song{
 				{
-					ID:         "",
-					Name:       "Take On Me",
-					MBID:       "12f65dca-de8f-43fe-a65d-f12a02aaadf3",
-					ISRC:       "",
-					Artist:     "a‐ha",
-					ArtistMBID: "",
-					Album:      "Hunting High and Low",
-					AlbumMBID:  "4ec07fe8-e7c6-3106-a0aa-fdf92f13f7fc",
-					Duration:   0,
+					ID:        "",
+					Name:      "Take On Me",
+					MBID:      "12f65dca-de8f-43fe-a65d-f12a02aaadf3",
+					ISRC:      "",
+					Artists:   []agents.Artist{{Name: "a‐ha"}},
+					Album:     "Hunting High and Low",
+					AlbumMBID: "4ec07fe8-e7c6-3106-a0aa-fdf92f13f7fc",
+					Duration:  0,
 				},
 			}))
 		})
