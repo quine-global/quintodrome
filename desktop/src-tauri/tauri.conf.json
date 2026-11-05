@@ -38,7 +38,8 @@
     ],
     "externalBin": ["binaries/navidrome"],
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "hardenedRuntime": false
     }
   }
 }
