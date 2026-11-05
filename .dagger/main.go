@@ -40,7 +40,7 @@ func (m *Quintodrome) Ci(ctx context.Context,
 // LintGo runs golangci-lint with the repo's .golangci.yml.
 func (m *Quintodrome) LintGo(ctx context.Context, src *dagger.Directory) error {
 	_, err := goContainer().
-		WithDirectory("/repo", src).
+		WithDirectory("/repo", src, dagger.ContainerWithDirectoryOpts{Owner: goUser}).
 		WithWorkdir("/repo").
 		// The version upstream pins (Makefile's GOLANGCI_LINT_VERSION), so it
 		// moves with upstream merges; one built with an older Go refuses a
@@ -51,9 +51,10 @@ func (m *Quintodrome) LintGo(ctx context.Context, src *dagger.Directory) error {
 set -e
 v=$(grep '^GOLANGCI_LINT_VERSION' Makefile | cut -d ' ' -f 3)
 v=${v#v}
-curl -sSfL "https://github.com/golangci/golangci-lint/releases/download/v$v/golangci-lint-$v-linux-$(go env GOARCH).tar.gz" | tar -xz --strip-components=1 -C /usr/local/bin
+mkdir -p "$HOME/bin"
+curl -sSfL "https://github.com/golangci/golangci-lint/releases/download/v$v/golangci-lint-$v-linux-$(go env GOARCH).tar.gz" | tar -xz --strip-components=1 -C "$HOME/bin"
 `}).
-		WithExec([]string{"golangci-lint", "run", "--timeout", "2m"}).
+		WithExec([]string{"sh", "-c", `"$HOME/bin/golangci-lint" run --timeout 2m`}).
 		Sync(ctx)
 	return err
 }
@@ -61,7 +62,7 @@ curl -sSfL "https://github.com/golangci/golangci-lint/releases/download/v$v/gola
 // FmtGo checks that goimports and go mod tidy leave the tree clean.
 func (m *Quintodrome) FmtGo(ctx context.Context, src *dagger.Directory) error {
 	_, err := goContainer().
-		WithDirectory("/repo", src).
+		WithDirectory("/repo", src, dagger.ContainerWithDirectoryOpts{Owner: goUser}).
 		WithWorkdir("/repo").
 		WithExec([]string{"sh", "-c", `
 go run golang.org/x/tools/cmd/goimports@latest -w $(find . -name '*.go' | grep -v '_gen.go$' | grep -v '.pb.go$')
@@ -75,7 +76,7 @@ test -z "$(git status --porcelain)"
 // BuildGo compiles the Navidrome server and all packages.
 func (m *Quintodrome) BuildGo(ctx context.Context, src *dagger.Directory) error {
 	_, err := goContainer().
-		WithDirectory("/repo", src).
+		WithDirectory("/repo", src, dagger.ContainerWithDirectoryOpts{Owner: goUser}).
 		WithWorkdir("/repo").
 		WithExec([]string{"go", "build", "-tags", "netgo,sqlite_fts5", "./..."}).
 		Sync(ctx)
@@ -85,7 +86,7 @@ func (m *Quintodrome) BuildGo(ctx context.Context, src *dagger.Directory) error 
 // TestGo runs the Go test suite.
 func (m *Quintodrome) TestGo(ctx context.Context, src *dagger.Directory) error {
 	_, err := goContainer().
-		WithDirectory("/repo", src).
+		WithDirectory("/repo", src, dagger.ContainerWithDirectoryOpts{Owner: goUser}).
 		WithWorkdir("/repo").
 		WithExec([]string{"go", "test", "-tags", "netgo,sqlite_fts5", "./..."}).
 		Sync(ctx)
@@ -132,14 +133,25 @@ func (m *Quintodrome) TestJS(ctx context.Context, src *dagger.Directory) error {
 // scratch. Go's caches and npm's are safe to share between steps and between
 // runs at the same time.
 
+// goUser is who the Go steps run as: not root, like upstream's CI. Root
+// reads any file whatever its mode, which fails the tests that make an
+// upload unreadable with chmod 000 and expect it not to open
+// (core/artwork). The repo and the caches are its own.
+const goUser = "ci"
+
 func goContainer() *dagger.Container {
+	owned := dagger.ContainerWithMountedCacheOpts{Owner: goUser}
 	return dag.Container().
 		From("golang:1.27").
 		WithExec([]string{"apt-get", "update"}).
 		WithExec([]string{"apt-get", "install", "-y", "zip"}).
-		WithMountedCache("/go/pkg/mod", dag.CacheVolume("quintodrome-go-mod")).
-		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("quintodrome-go-build")).
-		WithMountedCache("/root/.cache/golangci-lint", dag.CacheVolume("quintodrome-golangci-lint"))
+		WithExec([]string{"useradd", "--create-home", "--uid", "1000", goUser}).
+		WithUser(goUser).
+		WithEnvVariable("HOME", "/home/"+goUser).
+		WithEnvVariable("GOMODCACHE", "/home/"+goUser+"/go/pkg/mod").
+		WithMountedCache("/home/"+goUser+"/go/pkg/mod", dag.CacheVolume("quintodrome-ci-go-mod"), owned).
+		WithMountedCache("/home/"+goUser+"/.cache/go-build", dag.CacheVolume("quintodrome-ci-go-build"), owned).
+		WithMountedCache("/home/"+goUser+"/.cache/golangci-lint", dag.CacheVolume("quintodrome-ci-golangci-lint"), owned)
 }
 
 func jsContainer() *dagger.Container {
