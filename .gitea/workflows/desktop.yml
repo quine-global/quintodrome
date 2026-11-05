@@ -249,21 +249,33 @@ jobs:
           NOTES=$(curl -fsS "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/tags/$GITHUB_REF_NAME" \
             -H "Authorization: token $TOKEN" | jq -r '.message // ""')
           printf '%s\n' "$NOTES" > notes.txt
-          # tag_name must be the pushed tag itself (with its "v"), or Forgejo
-          # creates a second tag without it.
-          RELEASE_ID=$(jq -n --arg tag "$GITHUB_REF_NAME" --arg name "${GITHUB_REF_NAME#v}" --arg body "$NOTES" \
-              '{tag_name: $tag, name: $name, body: $body, draft: false}' \
-            | curl -fsS -X POST "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/releases" \
-              -H "Authorization: token $TOKEN" \
-              -H "Content-Type: application/json" \
-              --data-binary @- \
-            | jq -r '.id')
+          API="$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY"
+          # A re-run finds the release an earlier attempt made, and replaces
+          # its files.
+          RELEASE=$(curl -sS "$API/releases/tags/$GITHUB_REF_NAME" -H "Authorization: token $TOKEN")
+          RELEASE_ID=$(jq -r '.id // empty' <<<"$RELEASE")
+          if [[ -z "$RELEASE_ID" ]]; then
+            # tag_name must be the pushed tag itself (with its "v"), or
+            # Forgejo creates a second tag without it.
+            RELEASE=$(jq -n --arg tag "$GITHUB_REF_NAME" --arg name "${GITHUB_REF_NAME#v}" --arg body "$NOTES" \
+                '{tag_name: $tag, name: $name, body: $body, draft: false}' \
+              | curl -fsS -X POST "$API/releases" \
+                -H "Authorization: token $TOKEN" \
+                -H "Content-Type: application/json" \
+                --data-binary @-)
+            RELEASE_ID=$(jq -r '.id' <<<"$RELEASE")
+          fi
           for f in dist/*; do
-            curl -fsS -o /dev/null -X POST "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$(basename "$f")" \
+            NAME=$(basename "$f")
+            OLD=$(jq -r --arg n "$NAME" '.assets[]? | select(.name == $n) | .id' <<<"$RELEASE")
+            for id in $OLD; do
+              curl -fsS -X DELETE "$API/releases/$RELEASE_ID/assets/$id" -H "Authorization: token $TOKEN"
+            done
+            curl -fsS -o /dev/null -X POST "$API/releases/$RELEASE_ID/assets?name=$NAME" \
               -H "Authorization: token $TOKEN" \
               -H "Content-Type: application/octet-stream" \
               --data-binary @"$f"
-            echo "uploaded $(basename "$f")"
+            echo "uploaded $NAME"
           done
 
       # The cask, and one Sparkle appcast per architecture (Sparkle has no
