@@ -119,15 +119,26 @@ func (m *Quintodrome) TestJS(ctx context.Context, src *dagger.Directory) error {
 	return err
 }
 
+// The containers below keep their package and build caches in cache
+// volumes, which outlive a run in the (shared, long-running) dagger engine:
+// without them every step downloaded every Go module, or ran npm ci, from
+// scratch. Go's caches and npm's are safe to share between steps and between
+// runs at the same time.
+
 func goContainer() *dagger.Container {
 	return dag.Container().
 		From("golang:1.26").
 		WithExec([]string{"apt-get", "update"}).
-		WithExec([]string{"apt-get", "install", "-y", "zip"})
+		WithExec([]string{"apt-get", "install", "-y", "zip"}).
+		WithMountedCache("/go/pkg/mod", dag.CacheVolume("quintodrome-go-mod")).
+		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("quintodrome-go-build")).
+		WithMountedCache("/root/.cache/golangci-lint", dag.CacheVolume("quintodrome-golangci-lint"))
 }
 
 func jsContainer() *dagger.Container {
-	return dag.Container().From("node:24")
+	return dag.Container().
+		From("node:24").
+		WithMountedCache("/root/.npm", dag.CacheVolume("quintodrome-npm"))
 }
 
 // BuildDesktopWindows builds the Windows desktop app (.exe/.msi) inside a
