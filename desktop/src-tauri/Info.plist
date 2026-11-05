@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the app's Info.plist by Tauri. Sparkle's settings: the
+     appcast the release workflow writes into the Homebrew tap (served
+     publicly by git.quineglobal.com), and the public half of the Ed25519 key
+     that signs each update (the private half is the SPARKLE_PRIVATE_KEY
+     Actions secret). Intel builds switch to their own appcast at startup
+     (updater.rs). -->
+<plist version="1.0">
+<dict>
+    <key>SUFeedURL</key>
+    <string>https://git.quineglobal.com/quine-global/homebrew-tap.git/tree/appcasts/quintodrome-aarch64.xml?raw=true</string>
+    <key>SUPublicEDKey</key>
+    <string>TGL+YAU7EmJURAcgLLp42Y+e3m61Yjl3SaErRwCl9OM=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+</dict>
+</plist>

@@ -38,6 +38,7 @@
     ],
     "externalBin": ["binaries/navidrome"],
     "macOS": {
+      "frameworks": ["Sparkle.framework"],
       "signingIdentity": "-",
       "hardenedRuntime": false
     }

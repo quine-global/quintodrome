@@ -2,7 +2,9 @@ name: Desktop Release
 
 # Builds the Quintodrome desktop app (Tauri) for macOS (.app/.dmg), bundling
 # the Navidrome server as a sidecar, attaches the artifacts to the Forgejo
-# release on `v*` tags, and updates the Homebrew tap. Windows isn't built here
+# release on `v*` tags, and updates the Homebrew tap: the cask, and the
+# Sparkle appcasts the app checks for updates (one per architecture, signed
+# with the SPARKLE_PRIVATE_KEY secret; desktop/src-tauri/src/updater.rs). Windows isn't built here
 # (no Windows runner); the Windows steps below are kept for when one exists.
 #
 # Note: artifacts are not signed with Apple/Windows certs (macOS builds are only
@@ -84,6 +86,15 @@ jobs:
         with:
           workspaces: desktop/src-tauri
 
+      # Sparkle, the macOS updater the app links against and embeds
+      # (tauri.conf.json's bundle.macOS.frameworks), plus its signing tools.
+      - name: Setup Sparkle
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          bash desktop/scripts/download-sparkle.sh desktop/src-tauri
+          echo "SPARKLE_FRAMEWORK_PATH=$PWD/desktop/src-tauri" >> "$GITHUB_ENV"
+
       # Navidrome's sqlite_fts5 tag needs CGO, so on Windows we need a gcc.
       - name: Setup Windows CGO (mingw)
         if: runner.os == 'Windows'
@@ -144,11 +155,17 @@ jobs:
         shell: bash
         run: |
           cd desktop
+          # The app's version is the tag's, so Sparkle can tell releases apart
+          # (tauri.conf.json's own is a placeholder for local builds).
+          CONFIG=()
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            CONFIG=(--config "{\"version\":\"${GITHUB_REF_NAME#v}\"}")
+          fi
           for TARGET in $(echo "${{ matrix.targets }}" | tr , " "); do
             # rust-toolchain.toml pins a toolchain other than the one Setup
             # Rust gave the targets to, so add each to the pinned one here.
             rustup target add "$TARGET"
-            npx --yes @tauri-apps/cli@2 build --target "$TARGET"
+            npx --yes @tauri-apps/cli@2 build --target "$TARGET" "${CONFIG[@]}"
           done
 
       - name: Collect artifacts (macOS)
@@ -162,6 +179,42 @@ jobs:
             cp "$BUNDLE"/dmg/*.dmg dist/ 2>/dev/null || true
           done
           ls -la dist
+
+      # Sparkle only installs updates signed with the key whose public half is
+      # in Info.plist. The signatures go to the tap job, for the appcasts.
+      - name: Sign updates (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SPARKLE_PRIVATE_KEY" ]]; then
+            if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+              echo "::error::SPARKLE_PRIVATE_KEY secret is not set (this repo's Settings > Actions > Secrets)"
+              exit 1
+            fi
+            echo "No SPARKLE_PRIVATE_KEY; not signing (not a release)"
+            exit 0
+          fi
+          KEY_FILE="$RUNNER_TEMP/sparkle_key"
+          trap 'rm -f "$KEY_FILE"' EXIT
+          (umask 077; printf '%s\n' "$SPARKLE_PRIVATE_KEY" > "$KEY_FILE")
+          mkdir -p sparkle
+          for TARGET in $(echo "${{ matrix.targets }}" | tr , " "); do
+            ARCH="${TARGET%%-*}"
+            # Prints: sparkle:edSignature="..." length="..."
+            desktop/src-tauri/sparkle-bin/sign_update "dist/Quintodrome-$TARGET.app.zip" -f "$KEY_FILE" > "sparkle/$ARCH.txt"
+            cat "sparkle/$ARCH.txt"
+          done
+
+      - name: Upload update signatures (macOS)
+        if: runner.os == 'macOS' && hashFiles('sparkle/*.txt') != ''
+        uses: https://code.forgejo.org/forgejo/upload-artifact@v4
+        with:
+          name: sparkle-signatures
+          path: sparkle/*.txt
+          retention-days: 7
 
       - name: Collect artifacts (Windows)
         if: runner.os == 'Windows'
@@ -221,15 +274,23 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TAP_REPO: ssh://git@forge.quinefoundation.com:2200/quine-global/homebrew-tap.git # Forgejo SSH is on 2200; 22 is the host's sshd
-      # Public address for the cask. $GITHUB_SERVER_URL is how the runner
-      # reaches Forgejo (http://localhost:3000 on mainframe), not a public URL.
-      FORGE_URL: https://forge.quinefoundation.com
+      # Where the cask and the appcasts download releases from. The forge is
+      # tailnet-only, so for now so are installs and updates. $GITHUB_SERVER_URL
+      # is how the runner reaches Forgejo, not an address for users.
+      FORGE_URL: https://forge.in.quineglobal.com
+      # The public view of the repos (rgit).
+      GIT_URL: https://git.quineglobal.com
     steps:
       - uses: https://code.forgejo.org/forgejo/download-artifact@v4
         with:
           path: dist
           pattern: desktop-macos
           merge-multiple: true
+
+      - uses: https://code.forgejo.org/forgejo/download-artifact@v4
+        with:
+          name: sparkle-signatures
+          path: sparkle
 
       # The app is only ad-hoc signed, so the cask strips the quarantine flag
       # that Homebrew adds; otherwise Gatekeeper refuses to open it.
@@ -251,8 +312,11 @@ jobs:
             url "$FORGE_URL/$GITHUB_REPOSITORY/releases/download/v#{version}/Quintodrome-#{arch}-apple-darwin.app.zip"
             name "Quintodrome"
             desc "Desktop app wrapping the Navidrome music server"
-            homepage "$FORGE_URL/$GITHUB_REPOSITORY"
+            homepage "$GIT_URL/$GITHUB_REPOSITORY.git"
 
+            # The app updates itself (Sparkle), so \`brew upgrade\` leaves it
+            # be unless asked with --greedy.
+            auto_updates true
             depends_on :macos
 
             app "Quintodrome.app"
@@ -269,6 +333,35 @@ jobs:
           CASK
           cat tap/Casks/quintodrome.rb
 
+      # One appcast per architecture: Sparkle has no way to pick an
+      # architecture's download out of one feed. The app reads them from the
+      # tap through rgit (desktop/src-tauri/Info.plist, src/updater.rs).
+      - name: Write appcasts
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          PUB_DATE=$(date -R)
+          mkdir -p tap/appcasts
+          for ARCH in aarch64 x86_64; do
+            SIGNATURE=$(cat "sparkle/$ARCH.txt")
+            cat > "tap/appcasts/quintodrome-$ARCH.xml" <<APPCAST
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>Quintodrome</title>
+              <item>
+                <title>Quintodrome $VERSION</title>
+                <sparkle:version>$VERSION</sparkle:version>
+                <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+                <pubDate>$PUB_DATE</pubDate>
+                <enclosure url="$FORGE_URL/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/Quintodrome-$ARCH-apple-darwin.app.zip" type="application/octet-stream" $SIGNATURE/>
+              </item>
+            </channel>
+          </rss>
+          APPCAST
+            cat "tap/appcasts/quintodrome-$ARCH.xml"
+          done
+
       - name: Push to tap
         env:
           SSH_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
@@ -284,12 +377,13 @@ jobs:
           echo "[forge.quinefoundation.com]:2200 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHECXyh0SwRlXikgu919nC9OTmAU7AEcrlbJ/J/H9DTU" > ~/.ssh/known_hosts
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_key -o IdentitiesOnly=yes"
           git clone "$TAP_REPO" repo
-          mkdir -p repo/Casks
+          mkdir -p repo/Casks repo/appcasts
           cp tap/Casks/quintodrome.rb repo/Casks/
+          cp tap/appcasts/quintodrome-*.xml repo/appcasts/
           cd repo
           git config user.name "Quintodrome release"
           git config user.email "noreply@forge.quinefoundation.com"
-          git add Casks/quintodrome.rb
-          git diff --cached --quiet && { echo "Cask unchanged"; exit 0; }
+          git add Casks/quintodrome.rb appcasts/quintodrome-*.xml
+          git diff --cached --quiet && { echo "Cask and appcasts unchanged"; exit 0; }
           git commit -m "quintodrome ${GITHUB_REF_NAME#v}"
           git push

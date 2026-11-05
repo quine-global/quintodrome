@@ -119,3 +119,29 @@ The data folder (DB, cache) is always the OS app-data directory
 
 > Note: if a Navidrome server is already running on the configured host/port,
 > the app simply loads it and does **not** start a second instance.
+
+## Updates (macOS)
+
+The Mac app updates itself with [Sparkle](https://sparkle-project.org/), the
+standard macOS updater, through
+[tauri-plugin-sparkle-updater](https://crates.io/crates/tauri-plugin-sparkle-updater):
+**Quintodrome › Check for Updates…**, plus a daily check in the background.
+Sparkle shows its native "A new version is available" window and installs the
+update itself (`src-tauri/src/updater.rs`).
+
+- **Feeds:** one appcast per architecture, which the release workflow writes
+  into the Homebrew tap (`appcasts/quintodrome-<arch>.xml`); the app reads them
+  through git.quineglobal.com. `src-tauri/Info.plist` names the arm64 one,
+  and Intel builds switch to theirs at startup.
+- **Signing:** each update zip is signed with an Ed25519 key. The public half
+  is `SUPublicEDKey` in `src-tauri/Info.plist`; the private half is the
+  `SPARKLE_PRIVATE_KEY` Actions secret (base64 of the 32-byte seed, as Sparkle's
+  `generate_keys -x` exports it). Sparkle refuses updates not signed with it.
+  Lose the key and installed apps can't be updated by Sparkle any more.
+- **Version:** release builds take the tag's version (`v1.2.3` → `1.2.3`);
+  `tauri.conf.json`'s `0.1.0` is only for local builds.
+- **Homebrew:** the cask says `auto_updates true`, so `brew upgrade` leaves
+  the app to Sparkle (`brew upgrade --greedy` still upgrades it).
+- **Building:** `scripts/download-sparkle.sh src-tauri` fetches
+  Sparkle.framework and its tools (`build.sh` does it for you); they're
+  git-ignored. Sparkle only runs in the packaged `.app`, not `cargo run`.

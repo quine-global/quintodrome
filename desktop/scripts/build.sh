@@ -38,6 +38,13 @@ if [[ "$SKIP_TAURI" == true ]]; then
   exit 0
 fi
 
+if [[ "$(uname -s)" == Darwin ]]; then
+  # Sparkle, the updater the macOS app links against and embeds.
+  echo "==> Fetching Sparkle..."
+  bash "$DESKTOP/scripts/download-sparkle.sh" "$SRC_TAURI"
+  export SPARKLE_FRAMEWORK_PATH="$SRC_TAURI"
+fi
+
 echo "==> Building Quintodrome Tauri app..."
 (cd "$DESKTOP" && npx --yes @tauri-apps/cli@2 build)
 

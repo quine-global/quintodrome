@@ -1,4 +1,6 @@
 mod server;
+#[cfg(target_os = "macos")]
+mod updater;
 
 use server::{Navidrome, ServerState};
 use tauri::{
@@ -250,11 +252,26 @@ fn install_edit_shortcut_monitor(handle: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_opener::init())
-        // Native menu so Edit > Cut/Copy/Paste work via clicks.
-        .menu(|handle| tauri::menu::Menu::default(handle))
+        .plugin(tauri_plugin_opener::init());
+
+    // Updates through Sparkle, with Check for Updates… in the app menu.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .plugin(tauri_plugin_sparkle_updater::init())
+        .menu(|handle| updater::menu(handle))
+        .on_menu_event(|app, event| {
+            if event.id() == updater::CHECK_FOR_UPDATES_ID {
+                updater::check_for_updates(app);
+            }
+        });
+
+    // Native menu so Edit > Cut/Copy/Paste work via clicks.
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.menu(|handle| tauri::menu::Menu::default(handle));
+
+    builder
         .manage(ServerState::default())
         .invoke_handler(tauri::generate_handler![back, forward, reload, navigate])
         .setup(|app| {
@@ -344,6 +361,9 @@ pub fn run() {
 
             #[cfg(target_os = "macos")]
             install_edit_shortcut_monitor(app.handle());
+
+            #[cfg(target_os = "macos")]
+            updater::setup(app.handle());
 
             if let Some(toolbar) = app.get_webview("main") {
                 let _ = toolbar.emit("url-changed", mask.mask(&navidrome_url));

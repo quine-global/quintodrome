@@ -2,3 +2,5 @@ binaries/*
 !binaries/.gitkeep
 target/
 gen/
+Sparkle.framework/
+sparkle-bin/

@@ -27,6 +27,7 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSEvent"] }
 objc2-web-kit = { version = "0.3", features = ["WKWebView"] }
 block2 = "0.6"
+tauri-plugin-sparkle-updater = "0.3"
 
 [features]
 # This feature is used for production builds or when `devPath` points to the
