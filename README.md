@@ -37,7 +37,7 @@ Batteries included:
 On macOS, with [Homebrew](https://brew.sh):
 
 ```sh
-brew tap quine/tap https://forge.quinefoundation.com/quine-global/homebrew-tap.git
+brew tap quine/tap https://git.quineglobal.com/quine-global/homebrew-tap.git
 brew trust quine/tap
 brew install --cask quintodrome
 ```
@@ -45,6 +45,13 @@ brew install --cask quintodrome
 The tap URL is required: without one, `brew tap` assumes a GitHub repo. Homebrew
 refuses to load casks from a tap you haven't trusted, hence `brew trust`. Update
 with `brew upgrade --cask quintodrome`.
+
+Tapped it from the old address (`forge.quinefoundation.com`)? Point it at the
+new one:
+
+```sh
+brew tap --custom-remote quine/tap https://git.quineglobal.com/quine-global/homebrew-tap.git
+```
 
 Or download the `.dmg` from the
 [releases page](https://forge.quinefoundation.com/quine-global/quintodrome/releases)
