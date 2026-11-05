@@ -6,7 +6,7 @@
   ],
   "timezone": "America/Anchorage",
   "schedule": [
-    "before 6am on monday"
+    "* 0-5 * * 1"
   ],
   "prConcurrentLimit": 5,
   "github-actions": {
