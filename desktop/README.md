@@ -137,7 +137,16 @@ update itself (`src-tauri/src/updater.rs`).
   is `SUPublicEDKey` in `src-tauri/Info.plist`; the private half is the
   `SPARKLE_PRIVATE_KEY` Actions secret (base64 of the 32-byte seed, as Sparkle's
   `generate_keys -x` exports it). Sparkle refuses updates not signed with it.
-  Lose the key and installed apps can't be updated by Sparkle any more.
+  Lose the key and installed apps can't be updated by Sparkle any more. It's
+  the same key as Hyper's (quine-global/hyper, `docs/updates.md`): the login
+  Keychain's `hyper` account, backed up in 1Password ("Hyper Sparkle update
+  signing key"). The appcasts are separate, so neither app is offered the
+  other's updates.
+- **Changing the key:** Sparkle checks an update against the installed app's
+  key, then trusts the key in the update for the next one. So a new key ships
+  in a release still signed with the old one; only after that release does the
+  secret change. Anyone who skipped that release can't update through Sparkle
+  and has to reinstall (`brew upgrade --cask --greedy quintodrome`).
 - **Version:** release builds take the tag's version (`v1.2.3` → `1.2.3`,
   `CFBundleShortVersionString`, what people see); `tauri.conf.json`'s `0.1.0`
   is only for local builds. Sparkle compares `CFBundleVersion` instead, and

@@ -4,14 +4,14 @@
      appcast the release workflow writes into the Homebrew tap (served
      publicly by git.quineglobal.com), and the public half of the Ed25519 key
      that signs each update (the private half is the SPARKLE_PRIVATE_KEY
-     Actions secret). Intel builds switch to their own appcast at startup
+     Actions secret; shared with Hyper, desktop/README.md). Intel builds switch to their own appcast at startup
      (updater.rs). -->
 <plist version="1.0">
 <dict>
     <key>SUFeedURL</key>
     <string>https://git.quineglobal.com/quine-global/homebrew-tap.git/tree/appcasts/quintodrome-aarch64.xml?raw=true</string>
     <key>SUPublicEDKey</key>
-    <string>TGL+YAU7EmJURAcgLLp42Y+e3m61Yjl3SaErRwCl9OM=</string>
+    <string>PasstyI8TVmTzH+i0ICnqwn2Z6BpqwOjcMwpyKhSFXk=</string>
     <key>SUEnableAutomaticChecks</key>
     <true/>
 </dict>
