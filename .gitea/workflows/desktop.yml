@@ -288,9 +288,12 @@ jobs:
         if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
-          # Where the cask and the appcasts download releases from. The forge
-          # is tailnet-only, so for now so are installs and updates.
-          FORGE_URL: https://forge.in.quineglobal.com
+          # Where the cask and the appcasts download releases from: the
+          # forge is tailnet-only, but git.quineglobal.com (the public view
+          # of the repos, rgit) serves public repos' release files at the
+          # forge's own paths, straight from it (petersweb-infra's
+          # nixos/rgit.nix).
+          DOWNLOAD_URL: https://git.quineglobal.com
           # The public view of the repos (rgit).
           GIT_URL: https://git.quineglobal.com
         run: |
@@ -307,7 +310,7 @@ jobs:
             sha256 arm:   "$ARM_SHA",
                    intel: "$INTEL_SHA"
 
-            url "$FORGE_URL/$GITHUB_REPOSITORY/releases/download/v#{version}/Quintodrome-#{arch}-apple-darwin.app.zip"
+            url "$DOWNLOAD_URL/$GITHUB_REPOSITORY/releases/download/v#{version}/Quintodrome-#{arch}-apple-darwin.app.zip"
             name "Quintodrome"
             desc "Desktop app wrapping the Navidrome music server"
             homepage "$GIT_URL/$GITHUB_REPOSITORY.git"
@@ -349,7 +352,7 @@ jobs:
                 <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
                 <pubDate>$PUB_DATE</pubDate>
                 <description><![CDATA[$NOTES_HTML]]></description>
-                <enclosure url="$FORGE_URL/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/Quintodrome-$ARCH-apple-darwin.app.zip" type="application/octet-stream" $SIGNATURE/>
+                <enclosure url="$DOWNLOAD_URL/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/Quintodrome-$ARCH-apple-darwin.app.zip" type="application/octet-stream" $SIGNATURE/>
               </item>
             </channel>
           </rss>
