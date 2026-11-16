@@ -1,6 +1,6 @@
 //! Updates through Sparkle, the standard macOS updater
 //! (tauri-plugin-sparkle-updater): Quintodrome › Check for Updates… in the
-//! app menu, plus Sparkle's own daily background check. Sparkle shows the
+//! app menu, a background check at every launch, plus Sparkle's own daily one. Sparkle shows the
 //! native "A new version is available" window and installs the update itself.
 //!
 //! An update Sparkle has already downloaded silently (the user ticked
@@ -50,8 +50,16 @@ pub fn setup<R: Runtime>(app: &AppHandle<R>) {
             eprintln!("quintodrome: couldn't set the Intel appcast: {err}");
         }
     }
-    #[cfg(not(target_arch = "x86_64"))]
-    let _ = app;
+
+    // Sparkle's schedule checks once a day; check at every launch as well,
+    // in the background (only an update shows anything).
+    if let Some(updater) = app.sparkle_updater() {
+        if updater.automatically_checks_for_updates().unwrap_or(false) {
+            if let Err(err) = updater.check_for_updates_in_background() {
+                eprintln!("quintodrome: launch update check failed: {err}");
+            }
+        }
+    }
 }
 
 /// The default macOS menu, with "Check for Updates…" under About in the app

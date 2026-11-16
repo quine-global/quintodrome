@@ -125,7 +125,7 @@ The data folder (DB, cache) is always the OS app-data directory
 The Mac app updates itself with [Sparkle](https://sparkle-project.org/), the
 standard macOS updater, through
 [tauri-plugin-sparkle-updater](https://crates.io/crates/tauri-plugin-sparkle-updater):
-**Quintodrome › Check for Updates…**, plus a daily check in the background.
+**Quintodrome › Check for Updates…**, plus a background check at every launch and Sparkle's daily one.
 Sparkle shows its native "A new version is available" window and installs the
 update itself (`src-tauri/src/updater.rs`).
 
