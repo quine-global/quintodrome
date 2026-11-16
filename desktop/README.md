@@ -13,7 +13,8 @@ On launch the app:
 3. Loads the Navidrome UI in the content webview, below a thin toolbar with
    back/forward/reload buttons and an address bar.
 4. On exit, sends `SIGTERM` to the spawned server so it shuts down gracefully
-   (falls back to a hard kill after 3s).
+   (falls back to a hard kill after 6s). Navidrome takes up to 3s, letting
+   the webview's open connections finish, so the app hides its window first.
 
 On a **fresh install** (no existing Navidrome data) the app also auto-creates
 the initial admin user (`admin` / `admin`) behind the scenes, and auto-logs-in

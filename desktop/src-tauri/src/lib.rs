@@ -250,6 +250,15 @@ fn install_edit_shortcut_monitor(handle: &tauri::AppHandle) {
     }
 }
 
+/// Hides the app's windows at once (AppKit, not through the event loop, which
+/// is blocked while quitting).
+#[cfg(target_os = "macos")]
+fn hide_app() {
+    if let Some(mtm) = objc2::MainThreadMarker::new() {
+        objc2_app_kit::NSApplication::sharedApplication(mtm).hide(None);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -406,6 +415,11 @@ pub fn run() {
         .expect("error while building Quintodrome")
         .run(|app, event| {
             if let RunEvent::Exit = event {
+                // Stopping Navidrome blocks this (the main) thread for up to
+                // 3 seconds while it lets the content webview's connections
+                // finish; hide the app first so that isn't a beach ball.
+                #[cfg(target_os = "macos")]
+                hide_app();
                 server::shutdown(&app.state::<ServerState>());
             }
         });

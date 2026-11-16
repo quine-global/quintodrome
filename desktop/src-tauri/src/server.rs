@@ -17,7 +17,10 @@ pub const DEFAULT_HOST: &str = "127.0.0.1";
 pub const DEFAULT_PORT: u16 = 4533;
 
 const READY_TIMEOUT: Duration = Duration::from_secs(60);
-const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+/// Navidrome gives open connections (the content webview's) up to 3 seconds
+/// to finish, then closes its database; killing it at 3 seconds could catch it
+/// mid-close.
+const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(6);
 const HEALTH_PATH: &str = "/ping";
 
 #[derive(Debug, Error)]
